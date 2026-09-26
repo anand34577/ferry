@@ -55,7 +55,7 @@ func newTestServer(t *testing.T, mut func(*config.Config)) (*Server, *httptest.S
 	}
 	t.Cleanup(func() { d.Close() })
 	if cfg.DBDriver == "postgres" {
-		for _, tbl := range []string{"audit_log", "transfers", "download_sessions", "share_items", "shares", "uploads", "files", "folders", "sessions", "devices", "users", "settings", "schema_migrations"} {
+		for _, tbl := range []string{"password_resets", "audit_log", "transfers", "download_sessions", "share_items", "shares", "uploads", "files", "folders", "sessions", "devices", "users", "settings", "schema_migrations"} {
 			d.Exec(context.Background(), "DROP TABLE IF EXISTS "+tbl+" CASCADE")
 		}
 	}
