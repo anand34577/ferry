@@ -1,0 +1,16 @@
+# HTTPS for Ferry with automatic certificates (https://caddyserver.com).
+# Replace files.example.com with your domain. In Ferry's settings, set:
+#   FERRY_PUBLIC_URL=https://files.example.com
+#   FERRY_TRUSTED_PROXIES=127.0.0.1
+files.example.com {
+	request_body {
+		max_size 0
+	}
+	reverse_proxy 127.0.0.1:8080 {
+		flush_interval -1
+		transport http {
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+}

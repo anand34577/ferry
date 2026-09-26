@@ -1,0 +1,30 @@
+name: Backend
+on:
+  push: { paths: ["backend/**", ".github/workflows/backend.yml"] }
+  pull_request: { paths: ["backend/**"] }
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_USER: ferry, POSTGRES_PASSWORD: ferry, POSTGRES_DB: ferry }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: backend/go.mod, cache-dependency-path: backend/go.sum }
+      - name: Formatting
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "::error::run gofmt -w ."; exit 1; }
+      - run: go vet ./...
+      - name: Tests (SQLite)
+        run: go test -race -count=1 ./...
+      - name: Tests (PostgreSQL)
+        run: go test -count=1 ./...
+        env: { FERRY_TEST_PG_DSN: "postgres://ferry:ferry@localhost:5432/ferry?sslmode=disable" }
+      - name: Static analysis
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./... # pinned: @latest can break CI without a code change
+      - name: Vulnerability check
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...

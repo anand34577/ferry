@@ -1,0 +1,10 @@
+**/node_modules
+web/dist
+android
+dist
+.git
+/data
+backend/data
+.env
+backend/internal/server/webui/*
+!backend/internal/server/webui/.gitkeep

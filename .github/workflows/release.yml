@@ -1,0 +1,89 @@
+name: Release
+on:
+  push: { tags: ["v*.*.*"] }
+permissions:
+  contents: write
+  packages: write
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-go@v5
+        with: { go-version-file: backend/go.mod }
+      - name: Build web UI
+        run: cd web && npm ci && npm run build && cp -r dist/. ../backend/internal/server/webui/
+      - name: Cross-compile and package
+        run: |
+          mkdir -p dist
+          (cd backend && go run ./cmd/ferry config example) > ferry.env
+          for t in linux/amd64 linux/arm64 linux/arm/7 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            IFS=/ read os arch arm <<< "$t"
+            ext=""; [ "$os" = windows ] && ext=.exe
+            name="ferry_${GITHUB_REF_NAME}_${os}_${arch}${arm:+v$arm}"
+            mkdir -p "pkg/$name"
+            (cd backend && GOOS=$os GOARCH=$arch GOARM=$arm CGO_ENABLED=0 go build -trimpath               -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "../pkg/$name/ferry$ext" ./cmd/ferry)
+            cp ferry.env LICENSE "pkg/$name/"
+            if [ "$os" = windows ]; then (cd pkg && zip -qr "../dist/$name.zip" "$name"); else tar -C pkg -czf "dist/$name.tar.gz" "$name"; fi
+          done
+      - uses: actions/upload-artifact@v4
+        with: { name: binaries, path: dist/* }
+
+  android:
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Decode signing key
+        if: env.KEYSTORE_B64 != ''
+        run: echo "$KEYSTORE_B64" | base64 -d > $RUNNER_TEMP/release.jks && echo "FERRY_KEYSTORE=$RUNNER_TEMP/release.jks" >> $GITHUB_ENV
+      - name: Build release APK and AAB
+        working-directory: android
+        env:
+          FERRY_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          FERRY_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          FERRY_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        # Without the keystore Gradle falls back to the debug key; never publish a debug-signed release.
+        run: test -n "$FERRY_KEYSTORE" || { echo "::error::ANDROID_KEYSTORE_BASE64 secret is missing"; exit 1; } && ./gradlew assembleRelease bundleRelease --no-daemon && mkdir -p ../dist && cp app/build/outputs/apk/release/*.apk ../dist/ferry_${GITHUB_REF_NAME}.apk && cp app/build/outputs/bundle/release/*.aab ../dist/ferry_${GITHUB_REF_NAME}.aab
+      - uses: actions/upload-artifact@v4
+        with: { name: android, path: dist/* }
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/ferry:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/ferry:latest
+
+  release:
+    needs: [binaries, android, image]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            Container image: `ghcr.io/${{ github.repository_owner }}/ferry:${{ github.ref_name }}`
+            Verify downloads with `sha256sum -c SHA256SUMS.txt`.

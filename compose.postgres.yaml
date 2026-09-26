@@ -1,0 +1,37 @@
+# Ferry with PostgreSQL.
+#   1. Create .env with a database password (letters and digits):  POSTGRES_PASSWORD=choose-a-long-password
+#   2. Start:  docker compose -f compose.postgres.yaml up -d        → http://localhost:8080
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ferry
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ferry
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ferry"]
+      interval: 10s
+
+  ferry:
+    image: ghcr.io/anand34577/ferry:latest
+    container_name: ferry
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    ports:
+      - "8080:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      FERRY_DB_DRIVER: postgres
+      FERRY_DB_DSN: postgres://ferry:${POSTGRES_PASSWORD}@db:5432/ferry?sslmode=disable
+    volumes:
+      - ferry-files:/data
+
+volumes:
+  pg-data:
+  ferry-files:

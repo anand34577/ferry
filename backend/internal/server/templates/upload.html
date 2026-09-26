@@ -1,0 +1,47 @@
+{{define "upload.html"}}{{template "head" .}}
+{{if or .NeedLogin .Locked}}{{template "gate" .}}{{else}}
+<section class="card">
+  <p class="eyebrow">{{if .Owner}}{{.Owner}} is requesting files{{else}}File request{{end}}</p>
+  <h1 class="title">{{.Share.Name}}</h1>
+  {{if .Share.Message}}<p class="note">{{.Share.Message}}</p>{{end}}
+  <ul class="rules">
+    {{if .Share.MaxFileBytes}}<li>Max {{size .Share.MaxFileBytes}} per file</li>{{end}}
+    {{if .Share.MaxFiles}}<li>Up to {{.Share.MaxFiles}} files ({{.Share.UploadCount}} received)</li>{{end}}
+    {{if .Share.AllowedTypes}}<li>Accepted: {{.Share.AllowedTypes}}</li>{{end}}
+    {{if .Share.ExpiresAt}}<li>Open until <time data-rel="{{.Share.ExpiresAt}}">{{date .Share.ExpiresAt}}</time></li>{{end}}
+  </ul>
+  {{if .Error}}<p class="alert error" role="alert">{{.Error}}</p>{{end}}
+  {{if .Message}}<p class="alert ok" role="status">{{.Message}}</p>{{end}}
+
+  {{if eq .Share.Status "active"}}
+  <form id="upload-form" method="post" enctype="multipart/form-data" action="/u/{{.Token}}" class="stack"
+        data-tus="/u/{{.Token}}/tus" data-max="{{.Share.MaxFileBytes}}" data-types="{{.Share.AllowedTypes}}">
+    <label class="field"><span>Your name <span class="muted">(optional, shown to the recipient)</span></span>
+      <input type="text" name="uploader" maxlength="100" autocomplete="name"></label>
+    <label class="drop" id="drop">
+      <input type="file" name="files" multiple required {{if .AcceptAttr}}accept="{{.AcceptAttr}}"{{end}}>
+      <span class="drop-title">Choose files or drag them here</span>
+      <span class="drop-sub muted">Uploads resume automatically if your connection drops</span>
+    </label>
+    <ul class="queue" id="queue" aria-live="polite"></ul>
+    <button class="btn primary" type="submit" id="upload-btn">Upload</button>
+  </form>
+  {{end}}
+
+  {{if .Uploaded}}
+  <h2 class="sub">{{if .Share.AllowList}}Files received{{else}}Your uploads{{end}}</h2>
+  <ul class="files">
+    {{range .Uploaded}}
+    <li class="file">
+      <span class="badge k-other" aria-hidden="true">{{ext .Path}}</span>
+      <span class="fname"><span class="name" title="{{.Path}}">{{.Path}}</span><span class="fsize">{{size .Size}}</span></span>
+      {{if and $.CanDelete .Mine}}
+      <form method="post" action="/u/{{$.Token}}/delete/{{.ID}}" class="actions"><button class="btn ghost sm danger" type="submit">Delete</button></form>
+      {{end}}
+    </li>
+    {{end}}
+  </ul>
+  {{end}}
+</section>
+{{end}}
+{{template "foot" .}}{{end}}

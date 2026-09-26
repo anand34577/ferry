@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Self-hosted servers often run on a LAN over plain HTTP or with a private CA.
+     Cleartext is allowed so the user can decide; the app warns when a server is not HTTPS.
+     LAN peer transfers use HTTPS with fingerprint pinning implemented in code. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

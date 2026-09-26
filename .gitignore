@@ -1,0 +1,21 @@
+# build outputs
+/backend/ferry
+/backend/ferry.exe
+/backend/data/
+/dist/
+/web/node_modules/
+/web/dist/
+/backend/internal/server/webui/*
+!/backend/internal/server/webui/.gitkeep
+# android
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
+/android/.idea/
+*.iml
+.DS_Store
+/data/
+
+# local settings (may contain passwords)
+/.env

@@ -1,0 +1,39 @@
+{{define "share.html"}}{{template "head" .}}
+{{if or .NeedLogin .Locked}}{{template "gate" .}}{{else}}
+<section class="card">
+  <p class="eyebrow">{{if .Owner}}{{.Owner}} shared with you{{else}}Shared with you{{end}}</p>
+  <h1 class="title">{{.Share.Name}}</h1>
+  {{if .Share.Message}}<p class="note">{{.Share.Message}}</p>{{end}}
+  <p class="meta">
+    {{len .Entries}} {{if eq (len .Entries) 1}}file{{else}}files{{end}} · {{size .TotalBytes}}
+    {{if .Share.ExpiresAt}} · <span>expires <time data-rel="{{.Share.ExpiresAt}}">{{date .Share.ExpiresAt}}</time></span>{{end}}
+  </p>
+  {{if .OneTime}}<p class="alert info">This is a <strong>one-time link</strong>. Once a download starts it can't be opened from another device. If your download is interrupted you can resume it in this browser for {{.WindowHours}} hours.</p>{{end}}
+  {{if gt .Remaining 0}}<p class="alert info">This link can be downloaded {{.Remaining}} more {{if eq .Remaining 1}}time{{else}}times{{end}}.</p>{{end}}
+  {{if not .Share.AllowDownload}}<p class="alert info">The owner allows previewing only; downloads are disabled.</p>{{end}}
+
+  {{if .Entries}}
+  {{if and .Share.AllowDownload (gt (len .Entries) 1)}}
+  <a class="btn primary block" href="/s/{{.Token}}/zip" download>Download all <span class="muted-inv">(.zip, {{size .TotalBytes}})</span></a>
+  {{end}}
+  <ul class="files">
+    {{range .Entries}}
+    <li class="file">
+      <span class="badge k-{{kind .Mime}}" aria-hidden="true">{{ext .Path}}</span>
+      <span class="fname"><span class="name" title="{{.Path}}">{{.Path}}</span><span class="fsize">{{size .Size}}</span></span>
+      <span class="actions">
+        {{if .Preview}}<a class="btn ghost sm" href="/s/{{$.Token}}/f/{{.ID}}?inline=1" target="_blank" rel="noopener">Preview</a>{{end}}
+        {{if $.Share.AllowDownload}}<a class="btn sm {{if eq (len $.Entries) 1}}primary{{end}}" href="/s/{{$.Token}}/f/{{.ID}}" download>Download</a>{{end}}
+      </span>
+    </li>
+    {{end}}
+  </ul>
+  <details class="checksums"><summary>Verify file integrity (SHA-256)</summary>
+    <ul>{{range .Entries}}<li><span>{{.Path}}</span><code>{{.SHA256}}</code></li>{{end}}</ul>
+  </details>
+  {{else}}
+  <p class="empty">The files in this link are no longer available.</p>
+  {{end}}
+</section>
+{{end}}
+{{template "foot" .}}{{end}}

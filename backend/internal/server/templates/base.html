@@ -1,0 +1,46 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>{{.Title}} · {{.SiteName}}</title>
+<link rel="stylesheet" href="/_ferry/public.css">
+<script src="/_ferry/public.js" defer></script>
+</head>
+<body data-now="{{.Now}}">
+<header class="top"><span class="brand"><span class="logo" aria-hidden="true"></span>{{.SiteName}}</span></header>
+<main class="wrap">
+{{end}}
+
+{{define "foot"}}
+</main>
+<footer class="foot">Shared via {{.SiteName}}</footer>
+</body>
+</html>
+{{end}}
+
+{{define "gate"}}
+{{if .NeedLogin}}
+<section class="card narrow">
+  <div class="icon-lock" aria-hidden="true"></div>
+  <h1>Sign in required</h1>
+  <p class="muted">The owner only allows people with an account on this server to open this link.</p>
+  <a class="btn primary" href="/login?next={{if eq .Share.Kind "upload"}}/u/{{else}}/s/{{end}}{{.Token}}">Sign in</a>
+</section>
+{{else if .Locked}}
+<section class="card narrow">
+  <div class="icon-lock" aria-hidden="true"></div>
+  <h1>This link is protected</h1>
+  <p class="muted">Enter the password the sender gave you.</p>
+  {{if .Error}}<p class="alert error" role="alert">{{.Error}}</p>{{end}}
+  <form method="post" class="stack">
+    <label class="field"><span>Password</span>
+      <input type="password" name="password" required autofocus autocomplete="current-password"></label>
+    <button class="btn primary" type="submit">Unlock</button>
+  </form>
+</section>
+{{end}}
+{{end}}

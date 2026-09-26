@@ -1,0 +1,19 @@
+# Ferry with SQLite.
+#   Start:   docker compose up -d                              → http://localhost:8080
+#   Update:  docker compose pull && docker compose up -d
+#   Settings (optional): put them in a .env file next to this one, then run the start command again.
+services:
+  ferry:
+    image: ghcr.io/anand34577/ferry:latest
+    container_name: ferry
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ferry-data:/data
+
+volumes:
+  ferry-data:

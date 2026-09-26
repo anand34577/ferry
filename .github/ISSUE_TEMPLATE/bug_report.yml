@@ -1,0 +1,24 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes: { value: "Security issue? Please report it privately — see SECURITY.md." }
+  - type: dropdown
+    id: component
+    attributes: { label: Component, options: [Server, Web app, Android app, Share/upload page, LAN transfer, Docs] }
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes: { label: Versions, description: "Server version (Admin → System) and app version" }
+  - type: textarea
+    id: steps
+    attributes: { label: Steps to reproduce }
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: Expected vs actual behaviour }
+    validations: { required: true }
+  - type: textarea
+    id: env
+    attributes: { label: Environment, description: "Deployment (Docker/binary), database, reverse proxy, network (Wi-Fi/hotspot/guest)…" }
