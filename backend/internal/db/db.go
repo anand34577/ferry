@@ -390,4 +390,8 @@ CREATE TABLE user_identities (
 CREATE INDEX user_identities_user ON user_identities(user_id)
 `, `
 ALTER TABLE users ADD COLUMN prefs TEXT NOT NULL DEFAULT '{}'
+`, `
+ALTER TABLE uploads ADD COLUMN concat TEXT NOT NULL DEFAULT '';
+ALTER TABLE uploads ADD COLUMN crc32 BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE files ADD COLUMN crc32 BIGINT NOT NULL DEFAULT -1
 `}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { uploads, useUploads, type UpItem } from "../lib/uploads";
 import { formatBytes, formatEta, formatSpeed } from "../lib/format";
 import { Icon } from "./Icon";
@@ -18,7 +18,21 @@ const label: Record<UpItem["status"], string> = {
 export function TransferTray() {
   const items = useUploads();
   const [collapsed, setCollapsed] = useState(false);
-  if (items.length === 0) return null;
+  const ref = useRef<HTMLElement>(null);
+  const shown = items.length > 0;
+  // Reserve room at the bottom of the page for the panel, so it never hides the last rows.
+  useEffect(() => {
+    const el = ref.current;
+    const root = document.documentElement.style;
+    if (!shown || !el) return;
+    const ro = new ResizeObserver(() => root.setProperty("--tray-h", el.offsetHeight + 16 + "px"));
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      root.removeProperty("--tray-h");
+    };
+  }, [shown]);
+  if (!shown) return null;
   const active = items.filter((i) => ["queued", "uploading", "verifying", "paused"].includes(i.status));
   const total = active.reduce((a, i) => a + i.size, 0);
   const sent = active.reduce((a, i) => a + i.sent, 0);
@@ -26,7 +40,7 @@ export function TransferTray() {
   const title = active.length ? `Uploading ${active.length} ${active.length === 1 ? "file" : "files"}` : failed ? `${failed} upload(s) need attention` : "Uploads complete";
 
   return (
-    <section className={"tray" + (collapsed ? " collapsed" : "")} aria-label="Transfers">
+    <section ref={ref} className={"tray" + (collapsed ? " collapsed" : "")} aria-label="Transfers">
       <header className="tray-head">
         <button className="tray-title" onClick={() => setCollapsed(!collapsed)} aria-expanded={!collapsed}>
           <Icon name={collapsed ? "chevronRight" : "chevronDown"} size={18} />

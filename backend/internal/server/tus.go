@@ -11,7 +11,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"hash"
+	"hash/crc32"
 	"io"
 	"net/http"
 	"net/url"
@@ -34,14 +36,17 @@ type upload struct {
 	Conflict, HashState, ClientSHA                  string
 	Uploader, UploaderKey, FileID                   string
 	CreatedAt, UpdatedAt                            int64
+	Concat                                          string // "partial": one part of a parallel upload (tus concatenation)
+	CRC                                             int64  // running CRC-32, stored with the file for resumable ZIPs
 }
 
-const uploadCols = `id, user_id, share_id, folder_id, transfer_id, name, size, received, conflict, hash_state, client_sha256, uploader, uploader_key, file_id, created_at, updated_at`
+const uploadCols = `id, user_id, share_id, folder_id, transfer_id, name, size, received, conflict, hash_state, client_sha256, uploader, uploader_key, file_id, created_at, updated_at, concat, crc32`
+const uploadVals = `?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
 
 func scanUpload(row interface{ Scan(...any) error }) (*upload, error) {
 	u := &upload{}
 	err := row.Scan(&u.ID, &u.UserID, &u.ShareID, &u.FolderID, &u.TransferID, &u.Name, &u.Size, &u.Received, &u.Conflict,
-		&u.HashState, &u.ClientSHA, &u.Uploader, &u.UploaderKey, &u.FileID, &u.CreatedAt, &u.UpdatedAt)
+		&u.HashState, &u.ClientSHA, &u.Uploader, &u.UploaderKey, &u.FileID, &u.CreatedAt, &u.UpdatedAt, &u.Concat, &u.CRC)
 	return u, err
 }
 
@@ -57,7 +62,7 @@ func tusHeaders(w http.ResponseWriter) {
 func (s *Server) tusOptions(w http.ResponseWriter, r *http.Request) {
 	tusHeaders(w)
 	w.Header().Set("Tus-Version", tusVersion)
-	w.Header().Set("Tus-Extension", "creation,termination")
+	w.Header().Set("Tus-Extension", "creation,termination,concatenation")
 	if s.conf().MaxUploadBytes > 0 {
 		w.Header().Set("Tus-Max-Size", strconv.FormatInt(s.conf().MaxUploadBytes, 10))
 	}
@@ -149,9 +154,33 @@ func (s *Server) tusCreate(w http.ResponseWriter, r *http.Request, owner *User, 
 		s.writeErr(w, r, errf(412, "tus_version", "Unsupported upload protocol version."))
 		return
 	}
-	size, err := strconv.ParseInt(r.Header.Get("Upload-Length"), 10, 64)
-	if err != nil || size < 0 {
-		s.writeErr(w, r, errf(400, "bad_length", "Upload-Length header is required."))
+	// Parallel uploads (tus concatenation): the client uploads parts side by side, then creates the
+	// final upload, which joins them. Only for signed-in users; upload links use one connection.
+	concat := r.Header.Get("Upload-Concat")
+	var parts []*upload
+	var size int64
+	var err error
+	switch {
+	case concat != "" && share != nil:
+		s.writeErr(w, r, errf(400, "concat_unsupported", "Parallel uploads aren't available for upload links."))
+		return
+	case strings.HasPrefix(concat, "final;"):
+		if parts, size, err = s.concatParts(r, owner, strings.TrimPrefix(concat, "final;")); err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+	case concat != "" && concat != "partial":
+		s.writeErr(w, r, errf(400, "bad_concat", "Unsupported Upload-Concat value."))
+		return
+	default:
+		size, err = strconv.ParseInt(r.Header.Get("Upload-Length"), 10, 64)
+		if err != nil || size < 0 {
+			s.writeErr(w, r, errf(400, "bad_length", "Upload-Length header is required."))
+			return
+		}
+	}
+	if concat == "partial" {
+		s.tusCreatePart(w, r, owner, size, locationPrefix)
 		return
 	}
 	meta := parseMetadata(r.Header.Get("Upload-Metadata"))
@@ -208,9 +237,11 @@ func (s *Server) tusCreate(w http.ResponseWriter, r *http.Request, owner *User, 
 			up.FolderID = ""
 		}
 	}
-	if err := s.checkQuota(ctx, owner, size); err != nil {
-		s.writeErr(w, r, err)
-		return
+	if parts == nil { // the parts already reserved their space
+		if err := s.checkQuota(ctx, owner, size); err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
 	}
 	wc, err := s.store.OpenAppend("uploads/"+up.ID, 0)
 	if err != nil {
@@ -218,15 +249,19 @@ func (s *Server) tusCreate(w http.ResponseWriter, r *http.Request, owner *User, 
 		return
 	}
 	wc.Close()
-	_, err = s.db.Exec(ctx, `INSERT INTO uploads (`+uploadCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = s.db.Exec(ctx, `INSERT INTO uploads (`+uploadCols+`) VALUES (`+uploadVals+`)`,
 		up.ID, up.UserID, up.ShareID, up.FolderID, up.TransferID, up.Name, up.Size, 0, up.Conflict, "", up.ClientSHA,
-		up.Uploader, up.UploaderKey, "", up.CreatedAt, up.UpdatedAt)
+		up.Uploader, up.UploaderKey, "", up.CreatedAt, up.UpdatedAt, up.Concat, 0)
 	if err != nil {
 		s.store.Remove("uploads/" + up.ID)
 		s.writeErr(w, r, err)
 		return
 	}
 	w.Header().Set("Location", locationPrefix+up.ID)
+	if parts != nil {
+		s.joinParts(w, r, up, owner, parts)
+		return
+	}
 	w.Header().Set("Upload-Offset", "0")
 	if size == 0 { // empty files complete immediately
 		s.tusFinish(w, r, up, owner, share, sha256.New())
@@ -236,6 +271,121 @@ func (s *Server) tusCreate(w http.ResponseWriter, r *http.Request, owner *User, 
 		w.WriteHeader(201)
 		return
 	}
+	w.WriteHeader(201)
+}
+
+// tusCreatePart creates one part of a parallel upload. It carries no name or destination: those come
+// with the final upload that joins the parts.
+func (s *Server) tusCreatePart(w http.ResponseWriter, r *http.Request, owner *User, size int64, locationPrefix string) {
+	ctx := r.Context()
+	if err := s.checkQuota(ctx, owner, size); err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	up := &upload{ID: newID(), UserID: owner.ID, Name: "part", Size: size, Conflict: "keep_both", Concat: "partial", CreatedAt: nowMs()}
+	up.UpdatedAt = up.CreatedAt
+	wc, err := s.store.OpenAppend("uploads/"+up.ID, 0)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	wc.Close()
+	if _, err := s.db.Exec(ctx, `INSERT INTO uploads (`+uploadCols+`) VALUES (`+uploadVals+`)`,
+		up.ID, up.UserID, "", "", "", up.Name, up.Size, 0, up.Conflict, "", "", "", "", "", up.CreatedAt, up.UpdatedAt, up.Concat, 0); err != nil {
+		s.store.Remove("uploads/" + up.ID)
+		s.writeErr(w, r, err)
+		return
+	}
+	w.Header().Set("Location", locationPrefix+up.ID)
+	w.Header().Set("Upload-Offset", "0")
+	w.WriteHeader(201)
+}
+
+// concatParts resolves "final;<url> <url> …" to the caller's complete parts, in order.
+func (s *Server) concatParts(r *http.Request, owner *User, list string) ([]*upload, int64, error) {
+	urls := strings.Fields(list)
+	if len(urls) == 0 || len(urls) > 64 {
+		return nil, 0, errf(400, "bad_concat", "A parallel upload needs between 1 and 64 parts.")
+	}
+	var parts []*upload
+	var total int64
+	for _, u := range urls {
+		id := path.Base(strings.SplitN(u, "?", 2)[0])
+		p, err := scanUpload(s.db.QueryRow(r.Context(), `SELECT `+uploadCols+` FROM uploads WHERE id = ? AND user_id = ? AND share_id = '' AND concat = 'partial'`, id, owner.ID))
+		if err != nil {
+			return nil, 0, errf(404, "upload_not_found", "Part of this upload has expired. Please start it again.")
+		}
+		if p.Received != p.Size {
+			return nil, 0, errf(409, "part_incomplete", "Part of this upload isn't finished yet.")
+		}
+		parts = append(parts, p)
+		total += p.Size
+	}
+	return parts, total, nil
+}
+
+// joinParts writes the parts into the final upload (hashing as it goes), finishes it and removes the
+// parts. On failure the parts are kept, so the client can simply retry creating the final upload.
+func (s *Server) joinParts(w http.ResponseWriter, r *http.Request, up *upload, owner *User, parts []*upload) {
+	ctx := context.WithoutCancel(r.Context()) // finish even if the client stops waiting
+	fail := func(err error) {
+		s.db.Exec(ctx, `DELETE FROM uploads WHERE id = ?`, up.ID)
+		s.store.Remove("uploads/" + up.ID)
+		if err != nil {
+			s.writeErr(w, r, err)
+		}
+	}
+	for _, p := range parts {
+		if _, loaded := busy.LoadOrStore(p.ID, true); loaded {
+			fail(errf(423, "upload_busy", "This upload is already being finished."))
+			return
+		}
+		defer busy.Delete(p.ID)
+	}
+	wc, err := s.store.OpenAppend("uploads/"+up.ID, 0)
+	if err != nil {
+		fail(err)
+		return
+	}
+	h, crc := sha256.New(), crc32.NewIEEE()
+	out := io.MultiWriter(wc, h, crc)
+	buf := make([]byte, 1<<20)
+	for _, p := range parts {
+		rc, _, _, err := s.store.OpenRead("uploads/" + p.ID)
+		if err == nil {
+			var n int64
+			n, err = io.CopyBuffer(out, rc, buf)
+			rc.Close()
+			if err == nil && n != p.Size {
+				err = fmt.Errorf("part %s has %d bytes, expected %d", p.ID, n, p.Size)
+			}
+		}
+		if err != nil {
+			wc.Close()
+			fail(err)
+			return
+		}
+	}
+	if sy, ok := wc.(interface{ Sync() error }); ok {
+		err = sy.Sync()
+	}
+	wc.Close()
+	if err != nil {
+		fail(err)
+		return
+	}
+	up.Received, up.CRC = up.Size, int64(crc.Sum32())
+	s.db.Exec(ctx, `UPDATE uploads SET received = size, crc32 = ?, updated_at = ? WHERE id = ?`, up.CRC, nowMs(), up.ID)
+	s.tusFinish(w, r.WithContext(ctx), up, owner, nil, h)
+	if w.Header().Get("Ferry-Error") != "" {
+		fail(nil)
+		return
+	}
+	for _, p := range parts {
+		s.db.Exec(ctx, `DELETE FROM uploads WHERE id = ?`, p.ID)
+		s.store.Remove("uploads/" + p.ID)
+	}
+	w.Header().Set("Upload-Offset", strconv.FormatInt(up.Size, 10))
 	w.WriteHeader(201)
 }
 
@@ -252,6 +402,9 @@ func (s *Server) tusHead(w http.ResponseWriter, r *http.Request, up *upload, err
 	}
 	w.Header().Set("Upload-Offset", strconv.FormatInt(up.Received, 10))
 	w.Header().Set("Upload-Length", strconv.FormatInt(up.Size, 10))
+	if up.Concat == "partial" {
+		w.Header().Set("Upload-Concat", "partial")
+	}
 	if up.FileID != "" {
 		w.Header().Set("Ferry-File-Id", up.FileID)
 	}
@@ -303,6 +456,7 @@ func (s *Server) tusPatch(w http.ResponseWriter, r *http.Request, up *upload, ow
 	defer busy.Delete(up.ID)
 
 	h := sha256.New()
+	crc := uint32(up.CRC)
 	if up.HashState != "" {
 		st, err := base64.StdEncoding.DecodeString(up.HashState)
 		if err == nil {
@@ -339,10 +493,11 @@ func (s *Server) tusPatch(w http.ResponseWriter, r *http.Request, up *upload, ow
 			return err
 		}
 		up.HashState = base64.StdEncoding.EncodeToString(st)
+		up.CRC = int64(crc)
 		up.UpdatedAt = nowMs()
 		// Background context: progress must be saved even when the client disconnected.
-		_, err = s.db.Exec(context.Background(), `UPDATE uploads SET received = ?, hash_state = ?, updated_at = ? WHERE id = ?`,
-			up.Received, up.HashState, up.UpdatedAt, up.ID)
+		_, err = s.db.Exec(context.Background(), `UPDATE uploads SET received = ?, hash_state = ?, crc32 = ?, updated_at = ? WHERE id = ?`,
+			up.Received, up.HashState, up.CRC, up.UpdatedAt, up.ID)
 		sinceSave = 0
 		return err
 	}
@@ -359,6 +514,7 @@ func (s *Server) tusPatch(w http.ResponseWriter, r *http.Request, up *upload, ow
 				break
 			}
 			h.Write(buf[:n])
+			crc = crc32.Update(crc, crc32.IEEETable, buf[:n])
 			up.Received += int64(n)
 			sinceSave += int64(n)
 			if sinceSave >= progressEvery {
@@ -390,7 +546,7 @@ func (s *Server) tusPatch(w http.ResponseWriter, r *http.Request, up *upload, ow
 		return
 	}
 	w.Header().Set("Upload-Offset", strconv.FormatInt(up.Received, 10))
-	if up.Received == up.Size {
+	if up.Received == up.Size && up.Concat != "partial" { // parts are joined when the client creates the final upload
 		s.tusFinish(w, r.WithContext(context.WithoutCancel(ctx)), up, owner, share, h)
 		if w.Header().Get("Ferry-Error") != "" {
 			return
@@ -521,6 +677,11 @@ func (s *Server) finalizeUpload(ctx context.Context, up *upload, owner *User, sh
 		}
 		if _, err := tx.Exec(ctx, `UPDATE uploads SET file_id = ?, received = size, hash_state = '', updated_at = ? WHERE id = ?`, f.ID, now, up.ID); err != nil {
 			return err
+		}
+		if !skipped {
+			if _, err := tx.Exec(ctx, `UPDATE files SET crc32 = ? WHERE id = ?`, up.CRC, f.ID); err != nil {
+				return err
+			}
 		}
 		if share != nil {
 			_, err := tx.Exec(ctx, `UPDATE shares SET upload_count = upload_count + 1, uploaded_bytes = uploaded_bytes + ?, last_access = ? WHERE id = ?`, f.Size, now, share.ID)

@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"hash/crc32"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -424,8 +425,10 @@ func (s *Server) handleShareZip(w http.ResponseWriter, r *http.Request) {
 		s.publicErr(w, r, err)
 		return
 	}
-	s.linkEvent(r.Context(), r, sh, "download", "All files (zip)")
-	if err := s.streamZip(w, r, cleanName(sh.Name)+".zip", entries, "share:"+sh.ID, "user:"+sh.UserID); err != nil {
+	if firstRange(r) {
+		s.linkEvent(r.Context(), r, sh, "download", "All files (zip)")
+	}
+	if err := s.serveZip(w, r, cleanName(sh.Name)+".zip", entries, "share:"+sh.ID, "user:"+sh.UserID); err != nil {
 		s.publicErr(w, r, err)
 	}
 }
@@ -582,8 +585,8 @@ func (s *Server) receivePart(ctx context.Context, sh *Share, owner *User, part *
 		return nil, err
 	}
 	quotaLimit := min(limit, room)
-	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(wc, h), countingReader{io.LimitReader(part, quotaLimit+1), &s.metrics.bytesIn})
+	h, crcw := sha256.New(), crc32.NewIEEE()
+	n, err := io.Copy(io.MultiWriter(wc, h, crcw), countingReader{io.LimitReader(part, quotaLimit+1), &s.metrics.bytesIn})
 	wc.Close()
 	if err == nil && n > quotaLimit && quotaLimit == limit {
 		err = errf(413, "file_too_large", "\""+name+"\" is too large. Files must be at most "+humanSize(limit)+".")
@@ -596,8 +599,9 @@ func (s *Server) receivePart(ctx context.Context, sh *Share, owner *User, part *
 		return nil, err
 	}
 	up.Size, up.Received = n, n
-	if _, err := s.db.Exec(ctx, `INSERT INTO uploads (`+uploadCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		up.ID, up.UserID, up.ShareID, up.FolderID, "", up.Name, up.Size, up.Received, up.Conflict, "", "", up.Uploader, up.UploaderKey, "", up.CreatedAt, up.UpdatedAt); err != nil {
+	up.CRC = int64(crcw.Sum32())
+	if _, err := s.db.Exec(ctx, `INSERT INTO uploads (`+uploadCols+`) VALUES (`+uploadVals+`)`,
+		up.ID, up.UserID, up.ShareID, up.FolderID, "", up.Name, up.Size, up.Received, up.Conflict, "", "", up.Uploader, up.UploaderKey, "", up.CreatedAt, up.UpdatedAt, "", up.CRC); err != nil {
 		s.store.Remove("uploads/" + up.ID)
 		return nil, err
 	}

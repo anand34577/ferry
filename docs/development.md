@@ -92,10 +92,10 @@ Clients should send `X-Ferry-Client: <platform>/<version> api=1`; an outdated cl
 | `GET /files?folder=&q=&sort=name\|size\|date&order=` | folder listing or search |
 | `POST /files/check` | `{folderId,names}` → name conflicts |
 | `GET/PATCH/DELETE /files/{id}`, `GET /files/{id}/content[?inline=1]` | metadata, rename/move, delete, download (Range, `X-Content-SHA256`) |
-| `GET /files/zip?files=&folders=`, `POST /files/zip` | streaming ZIP; for large selections POST `{fileIds,folderIds,name}` → `{url}` (a 5-minute ticket URL). Fails up front with `file_missing` rather than sending an incomplete archive |
+| `GET /files/zip?files=&folders=`, `POST /files/zip` | uncompressed ZIP with a precomputed layout: `Content-Length`, `ETag` and `Range` requests (resumable); for large selections POST `{fileIds,folderIds,name}` → `{url}` (a 5-minute ticket URL). Fails up front with `file_missing` rather than sending an incomplete archive |
 | `POST /files/batch` | `{action: delete\|move, fileIds, folderIds, targetFolderId}` |
 | `POST /folders`, `PATCH/DELETE /folders/{id}` | |
-| `POST /uploads` … | tus 1.0 (creation, termination). Metadata: `filename`, `folderId`, `transferId`, `conflict` (`keep_both\|replace\|skip`), `sha256`. Final response headers: `Ferry-File-Id`, `Ferry-Sha256`, `Ferry-Skipped` |
+| `POST /uploads` … | tus 1.0 (creation, termination, concatenation — `Upload-Concat: partial` parts, then `final;<urls>` with the metadata joins them into one file; not on upload links). Metadata: `filename`, `folderId`, `transferId`, `conflict` (`keep_both\|replace\|skip`), `sha256`. Final response headers: `Ferry-File-Id`, `Ferry-Sha256`, `Ferry-Skipped` |
 | `GET /uploads` | my incomplete uploads |
 | `GET/POST /shares`, `GET/PATCH/DELETE /shares/{id}` | links (`kind: download\|upload`, `expiresIn`, `password`, `maxDownloads`, flags…) |
 | `POST /shares/{id}/regenerate`, `POST /shares/{id}/email` | new token (old URL and short URL die), email the link |

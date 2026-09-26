@@ -1,15 +1,20 @@
 package server
 
 import (
+	"archive/zip"
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/smtp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -261,4 +266,132 @@ func TestDeviceOnlineAndPrefs(t *testing.T) {
 	if ev := adm.json("GET", "/api/v1/admin/audit?q=profile_updated", nil, 200)["events"].([]any); len(ev) != 0 {
 		t.Fatalf("preference changes shouldn't be audited: %v", ev)
 	}
+}
+
+// Parallel uploads: parts are uploaded independently and joined into one verified file.
+func TestParallelUpload(t *testing.T) {
+	_, ts := newTestServer(t, nil)
+	c := setupAdmin(t, ts)
+	data := make([]byte, 3<<20+123)
+	for i := range data {
+		data[i] = byte(i * 7)
+	}
+	half := len(data) / 2
+	var urls []string
+	for _, part := range [][]byte{data[:half], data[half:]} {
+		resp, _ := c.do("POST", "/api/v1/uploads", nil, map[string]string{"Tus-Resumable": "1.0.0", "Upload-Length": strconv.Itoa(len(part)), "Upload-Concat": "partial"})
+		if resp.StatusCode != 201 {
+			t.Fatalf("create part: %d", resp.StatusCode)
+		}
+		loc := resp.Header.Get("Location")
+		resp, _ = c.do("PATCH", loc, part, map[string]string{"Tus-Resumable": "1.0.0", "Upload-Offset": "0", "Content-Type": "application/offset+octet-stream"})
+		if resp.StatusCode != 204 || resp.Header.Get("Ferry-File-Id") != "" {
+			t.Fatalf("patch part: %d %v", resp.StatusCode, resp.Header)
+		}
+		urls = append(urls, ts.URL+loc)
+	}
+	resp, body := c.do("POST", "/api/v1/uploads", nil, map[string]string{"Tus-Resumable": "1.0.0", "Upload-Concat": "final;" + strings.Join(urls, " "),
+		"Upload-Metadata": meta("filename", "joined.bin")})
+	if resp.StatusCode != 201 {
+		t.Fatalf("final: %d %s", resp.StatusCode, body)
+	}
+	sum := sha256.Sum256(data)
+	if resp.Header.Get("Ferry-Sha256") != hex.EncodeToString(sum[:]) {
+		t.Fatalf("checksum %s", resp.Header.Get("Ferry-Sha256"))
+	}
+	_, got := c.do("GET", "/api/v1/files/"+resp.Header.Get("Ferry-File-Id")+"/content", nil, nil)
+	if !bytes.Equal(got, data) {
+		t.Fatal("joined content differs")
+	}
+	if ups := c.json("GET", "/api/v1/uploads", nil, 200)["uploads"].([]any); len(ups) != 0 {
+		t.Fatalf("parts left behind: %v", ups)
+	}
+	// Parts can't be joined twice, and upload links don't accept parts.
+	resp, _ = c.do("POST", "/api/v1/uploads", nil, map[string]string{"Tus-Resumable": "1.0.0", "Upload-Concat": "final;" + strings.Join(urls, " "), "Upload-Metadata": meta("filename", "again.bin")})
+	if resp.StatusCode != 404 {
+		t.Fatalf("rejoin: %d", resp.StatusCode)
+	}
+}
+
+// ZIP downloads have a known size and can be resumed with Range requests.
+func TestResumableZip(t *testing.T) {
+	s, ts := newTestServer(t, nil)
+	c := setupAdmin(t, ts)
+	big := bytes.Repeat([]byte("ferry-"), 200000)
+	id1, _ := c.tusUpload("/api/v1/uploads", big, 1<<20, meta("filename", "big.txt"))
+	id2, _ := c.tusUpload("/api/v1/uploads", []byte("héllo"), 16, meta("filename", "Grüße 😀.txt"))
+	id3, _ := c.tusUpload("/api/v1/uploads", nil, 16, meta("filename", "empty.txt"))
+	s.db.Exec(context.Background(), `UPDATE files SET crc32 = -1 WHERE id = ?`, id2) // uploaded before CRCs were stored
+	url := "/api/v1/files/zip?files=" + id1 + "," + id2 + "," + id3 + "&name=bundle"
+	resp, full := c.do("GET", url, nil, nil)
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Length") != strconv.Itoa(len(full)) || resp.Header.Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("zip: %d %v", resp.StatusCode, resp.Header)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(full), int64(len(full)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]byte{"big.txt": big, "Grüße 😀.txt": []byte("héllo"), "empty.txt": {}}
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := io.ReadAll(rc) // also verifies the CRC-32
+		rc.Close()
+		if err != nil || !bytes.Equal(b, want[f.Name]) {
+			t.Fatalf("%s: %v", f.Name, err)
+		}
+		delete(want, f.Name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing: %v", want)
+	}
+	// Resume from the middle of the first file.
+	resp, tail := c.do("GET", url, nil, map[string]string{"Range": "bytes=500000-", "If-Range": resp.Header.Get("ETag")})
+	if resp.StatusCode != 206 || !bytes.Equal(tail, full[500000:]) {
+		t.Fatalf("range: %d, %d bytes", resp.StatusCode, len(tail))
+	}
+}
+
+// Files over 4 GB get ZIP64 records that standard readers understand.
+func TestZipPlanZip64(t *testing.T) {
+	const size = 5 << 30
+	plan, err := planZip([]entry{{Path: "huge.bin", File: &File{ID: "f", Blob: "b", Size: size, UpdatedAt: 1}}}, map[string]uint32{"f": 1234})
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(planReaderAt{plan}, plan.size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := zr.File[0]; f.UncompressedSize64 != size || f.CRC32 != 1234 {
+		t.Fatalf("got %d bytes, crc %d", f.UncompressedSize64, f.CRC32)
+	}
+}
+
+// planReaderAt reads a plan with zeros for file data (enough to parse the archive's structure).
+type planReaderAt struct{ p *zipPlan }
+
+func (r planReaderAt) ReadAt(b []byte, off int64) (int, error) {
+	n := 0
+	for n < len(b) && off+int64(n) < r.p.size {
+		pos := off + int64(n)
+		for _, sg := range r.p.segs {
+			if pos >= sg.start && pos < sg.start+sg.size {
+				if sg.blob == "" {
+					n += copy(b[n:], sg.mem[pos-sg.start:])
+				} else {
+					k := min(int64(len(b)-n), sg.start+sg.size-pos)
+					clear(b[n : n+int(k)])
+					n += int(k)
+				}
+				break
+			}
+		}
+	}
+	if n < len(b) {
+		return n, io.EOF
+	}
+	return n, nil
 }

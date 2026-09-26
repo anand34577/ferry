@@ -50,7 +50,8 @@ In **Send**, choose one of your signed-in devices instead of **Create a link**. 
 
 **Files** works like a folder on your computer: create folders, upload files or whole folders, rename, move, delete, and download several items as one ZIP.
 
-- **Uploads resume automatically** after a lost connection or even a page reload. The tray at the bottom shows progress; you can pause, resume or cancel.
+- **Uploads resume automatically** after a lost connection or even a page reload. The panel at the bottom shows progress; you can pause, resume or cancel. Files of 128 MB and more are sent in three parts at once, which is faster on quick connections; each part resumes on its own.
+- **ZIP downloads resume too:** downloading several files or a folder gives a ZIP with a known size, so the browser shows real progress and can continue an interrupted download.
 - **Same name?** When a file already exists you choose **Keep both** (`photo (1).jpg`), **Replace**, **Skip** or **Rename**.
 - **Integrity:** every file is checked with a SHA-256 checksum; a damaged upload is rejected, never silently saved.
 - **Preview** images, video, audio, PDF and text files in the browser.

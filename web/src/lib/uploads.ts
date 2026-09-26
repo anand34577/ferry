@@ -42,6 +42,7 @@ interface Job {
 }
 
 const PARALLEL = 3;
+const PARALLEL_PARTS_FROM = 128 * 1024 * 1024;
 let seq = 0;
 
 class UploadManager {
@@ -136,6 +137,9 @@ class UploadManager {
     const upload = new tus.Upload(file, {
       endpoint: "/api/v1/uploads",
       chunkSize: 32 * 1024 * 1024, // under Cloudflare's 100 MB request limit; progress is saved server-side mid-chunk too
+      // Large files go up as 3 parts side by side (joined on the server), which fills fast
+      // connections that one stream can't; each part resumes on its own after interruptions.
+      parallelUploads: file.size >= PARALLEL_PARTS_FROM ? 3 : 1,
       retryDelays: [0, 1000, 3000, 5000, 10000, 20000, 30000, 60000],
       metadata: meta,
       headers: { "X-Requested-With": "ferry", "X-Ferry-Client": CLIENT_HEADER },

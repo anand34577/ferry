@@ -1,10 +1,8 @@
 package server
 
 import (
-	"archive/zip"
 	"context"
 	"errors"
-	"io"
 	"math"
 	"mime"
 	"net/http"
@@ -759,19 +757,6 @@ func detectMime(head []byte, name string) string {
 	return b
 }
 
-type ctxReadSeeker struct {
-	ctx context.Context
-	rs  io.ReadSeeker
-}
-
-func (c ctxReadSeeker) Read(p []byte) (int, error) {
-	if err := c.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return c.rs.Read(p)
-}
-func (c ctxReadSeeker) Seek(off int64, whence int) (int64, error) { return c.rs.Seek(off, whence) }
-
 func contentDisposition(kind, name string) string {
 	if v := mime.FormatMediaType(kind, map[string]string{"filename": name}); v != "" {
 		return v
@@ -915,7 +900,7 @@ func (s *Server) handleOwnerZip(w http.ResponseWriter, r *http.Request) {
 	if rawName == "" {
 		name = "ferry-files"
 	}
-	if err := s.streamZip(w, r, name+".zip", entries, "user:"+u.ID); err != nil {
+	if err := s.serveZip(w, r, name+".zip", entries, "user:"+u.ID); err != nil {
 		s.writeErr(w, r, err)
 	}
 }
@@ -929,52 +914,6 @@ func (s *Server) checkBlobs(entries []entry) error {
 		}
 		rc.Close()
 	}
-	return nil
-}
-
-// streamZip writes an uncompressed (store) ZIP directly to the response; memory use is constant.
-// It returns an error (and writes nothing) if any file is unreadable, so recipients never get a
-// silently incomplete archive. A failure after streaming started aborts without a central directory.
-func (s *Server) streamZip(w http.ResponseWriter, r *http.Request, name string, entries []entry, streamKeys ...string) error {
-	if err := s.checkBlobs(entries); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-	keys := append([]string{}, streamKeys...)
-	for _, e := range entries {
-		keys = append(keys, e.File.ID)
-	}
-	defer s.streams.add(keys, cancel)()
-	s.metrics.downloadsActive.Add(1)
-	defer s.metrics.downloadsActive.Add(-1)
-
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", contentDisposition("attachment", name))
-	w.Header().Set("Cache-Control", "private, no-store")
-	zw := zip.NewWriter(w)
-	for _, e := range entries {
-		if ctx.Err() != nil {
-			return nil
-		}
-		rc, _, _, err := s.store.OpenRead("blobs/" + e.File.Blob)
-		if err != nil {
-			s.log.Error("zip aborted: file became unreadable", "file", e.File.ID, "err", err)
-			return nil // headers are sent; dropping the central directory marks the archive as broken
-		}
-		hdr := &zip.FileHeader{Name: e.Path, Method: zip.Store, Modified: time.UnixMilli(e.File.UpdatedAt)}
-		hdr.SetMode(0o644)
-		fw, err := zw.CreateHeader(hdr)
-		if err == nil {
-			_, err = io.Copy(fw, ctxReadSeeker{ctx, rc})
-		}
-		rc.Close()
-		if err != nil {
-			s.log.Warn("zip stream aborted", "err", err)
-			return nil // client gone or revoked; do not write the central directory
-		}
-	}
-	zw.Close()
 	return nil
 }
 
