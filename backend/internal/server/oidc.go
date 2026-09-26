@@ -324,14 +324,14 @@ func (s *Server) linkIdentity(ctx context.Context, r *http.Request, u *User, id 
 	case err == nil && owner == u.ID:
 		return nil
 	case err == nil:
-		return errors.New("This " + s.conf().OIDC.Name + " account is already connected to a different Ferry account.")
+		return errf(409, "identity_in_use", "This "+s.conf().OIDC.Name+" account is already connected to a different Ferry account.")
 	case !db.IsNoRows(err):
-		return errors.New("Something went wrong on the server. Please try again.")
+		return errf(500, "internal", "Something went wrong on the server. Please try again.")
 	}
 	now := nowMs()
 	if _, err := s.db.Exec(ctx, `INSERT INTO user_identities (id, user_id, issuer, subject, email, created_at, last_login) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		newID(), u.ID, id.Issuer, id.Subject, id.Email, now, now); err != nil {
-		return errors.New("Something went wrong on the server. Please try again.")
+		return errf(500, "internal", "Something went wrong on the server. Please try again.")
 	}
 	s.audit(ctx, r, u.ID, "oidc_connected", firstNonEmpty(id.Email, id.Subject), s.conf().OIDC.Name)
 	return nil
