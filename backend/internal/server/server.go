@@ -240,7 +240,15 @@ func (s *Server) routes() {
 	h("GET /_ferry/{file}", s.handlePublicAsset)
 
 	h("/api/", func(w http.ResponseWriter, r *http.Request) { s.writeErr(w, r, errNotFound) })
-	h("/", s.handleSPA)
+	if s.conf().WebApp {
+		h("/", s.handleSPA)
+	} else {
+		h("GET /reset", s.handleResetPage)
+		h("POST /reset", s.handleResetPage)
+		h("/", func(w http.ResponseWriter, r *http.Request) {
+			s.messagePage(w, 404, "Nothing here", "This server doesn't offer a web app. Use the Ferry app to sign in; shared links still open in any browser.")
+		})
+	}
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
@@ -271,6 +279,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"publicSharing":       s.conf().PublicSharing,
 		"maxUploadBytes":      s.conf().MaxUploadBytes,
 		"oidc":                sso,
+		"webApp":              s.conf().WebApp,
 	})
 }
 

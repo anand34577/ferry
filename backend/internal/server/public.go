@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"mime/multipart"
@@ -40,6 +41,8 @@ type pageData struct {
 	Uploaded    []pageEntry
 	CanDelete   bool
 	AcceptAttr  string
+	AnyDone     bool
+	WebApp      bool
 	Now         int64
 	AssetVer    string
 }
@@ -49,12 +52,14 @@ type pageEntry struct {
 	Size                   int64
 	Preview                bool
 	Mine                   bool
+	Done                   bool // already downloaded through this one-time/limited link session
 }
 
 func (s *Server) render(w http.ResponseWriter, status int, tmpl string, d *pageData) {
 	d.SiteName = s.conf().SiteName
 	d.Now = nowMs()
 	d.AssetVer = assetVer
+	d.WebApp = s.conf().WebApp
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
@@ -263,11 +268,13 @@ func (s *Server) handleSharePage(w http.ResponseWriter, r *http.Request) {
 		s.messagePage(w, 500, "Something went wrong", "The server could not load this link. Please try again.")
 		return
 	}
+	done := s.deliveredSet(r, sh)
 	for _, e := range entries {
 		d.Entries = append(d.Entries, pageEntry{ID: e.File.ID, Path: e.Path, Size: e.File.Size, Mime: e.File.Mime, SHA256: e.File.SHA256,
-			Preview: sh.AllowPreview && sh.MaxDownloads == 0 && isPreviewable(e.File.Mime)})
+			Preview: sh.AllowPreview && sh.MaxDownloads == 0 && isPreviewable(e.File.Mime), Done: done[e.File.ID] || done[zipKey]})
 		d.TotalBytes += e.File.Size
 	}
+	d.AnyDone = len(done) > 0
 	d.OneTime = sh.MaxDownloads == 1
 	if sh.MaxDownloads > 1 {
 		d.Remaining = sh.MaxDownloads - sh.DownloadCount
@@ -333,6 +340,85 @@ func (s *Server) claimDownload(w http.ResponseWriter, r *http.Request, sh *Share
 	return nil
 }
 
+// ---------- one download per recipient on limited links ----------
+
+// A download session (one recipient) may resume an interrupted download, but a file that was
+// delivered completely can't be downloaded again with the same session.
+const zipKey = "*zip"
+
+func (s *Server) deliveredSet(r *http.Request, sh *Share) map[string]bool {
+	out := map[string]bool{}
+	tok := s.validDownloadSession(r, sh)
+	if tok == "" {
+		return out
+	}
+	var v string
+	s.db.QueryRow(r.Context(), `SELECT delivered FROM download_sessions WHERE id = ?`, hashToken(tok)).Scan(&v)
+	for _, k := range strings.Split(v, "|") {
+		if k != "" {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+func (s *Server) markDelivered(r *http.Request, sh *Share, key string) {
+	if tok := s.validDownloadSession(r, sh); tok != "" {
+		s.db.Exec(context.WithoutCancel(r.Context()), `UPDATE download_sessions SET delivered = delivered || ? WHERE id = ?`, "|"+key+"|", hashToken(tok))
+	}
+}
+
+// deliveryWriter notices when a response carried a file through to its last byte.
+type deliveryWriter struct {
+	http.ResponseWriter
+	status int
+	n      int64
+}
+
+func (d *deliveryWriter) WriteHeader(c int) {
+	if d.status == 0 {
+		d.status = c
+	}
+	d.ResponseWriter.WriteHeader(c)
+}
+
+func (d *deliveryWriter) Write(b []byte) (int, error) {
+	if d.status == 0 {
+		d.status = 200
+	}
+	n, err := d.ResponseWriter.Write(b)
+	d.n += int64(n)
+	return n, err
+}
+
+// ReadFrom keeps the zero-copy path of the underlying writer.
+func (d *deliveryWriter) ReadFrom(src io.Reader) (int64, error) {
+	if d.status == 0 {
+		d.status = 200
+	}
+	n, err := io.Copy(d.ResponseWriter, src)
+	d.n += n
+	return n, err
+}
+
+func (d *deliveryWriter) Unwrap() http.ResponseWriter { return d.ResponseWriter }
+
+func (d *deliveryWriter) complete() bool {
+	h := d.Header()
+	switch d.status {
+	case 200:
+		cl, err := strconv.ParseInt(h.Get("Content-Length"), 10, 64)
+		return err == nil && d.n == cl
+	case 206:
+		var a, b, total int64
+		if _, err := fmt.Sscanf(h.Get("Content-Range"), "bytes %d-%d/%d", &a, &b, &total); err != nil {
+			return false
+		}
+		return b == total-1 && d.n == b-a+1
+	}
+	return false
+}
+
 func (s *Server) publicErr(w http.ResponseWriter, r *http.Request, err error) {
 	var ae *apiErr
 	if errors.As(err, &ae) {
@@ -387,6 +473,12 @@ func (s *Server) handleShareDownload(w http.ResponseWriter, r *http.Request) {
 			s.publicErr(w, r, err)
 			return
 		}
+		if sh.MaxDownloads > 0 {
+			if done := s.deliveredSet(r, sh); done[f.ID] || done[zipKey] {
+				s.publicErr(w, r, errf(410, "already_downloaded", "You've already downloaded \""+f.Name+"\" with this link. Links with a download limit give each file once."))
+				return
+			}
+		}
 	}
 	if firstRange(r) {
 		kind := "download"
@@ -395,7 +487,11 @@ func (s *Server) handleShareDownload(w http.ResponseWriter, r *http.Request) {
 		}
 		s.linkEvent(r.Context(), r, sh, kind, f.Name)
 	}
-	s.serveFile(w, r, f, inline, "share:"+sh.ID, "user:"+sh.UserID)
+	dw := &deliveryWriter{ResponseWriter: w}
+	s.serveFile(dw, r, f, inline, "share:"+sh.ID, "user:"+sh.UserID)
+	if !inline && sh.MaxDownloads > 0 && dw.complete() {
+		s.markDelivered(r, sh, f.ID)
+	}
 }
 
 func (s *Server) handleShareZip(w http.ResponseWriter, r *http.Request) {
@@ -425,11 +521,20 @@ func (s *Server) handleShareZip(w http.ResponseWriter, r *http.Request) {
 		s.publicErr(w, r, err)
 		return
 	}
+	if sh.MaxDownloads > 0 && len(s.deliveredSet(r, sh)) > 0 {
+		s.publicErr(w, r, errf(410, "already_downloaded", "You've already downloaded files from this link. Links with a download limit give each file once — download the remaining files one by one."))
+		return
+	}
 	if firstRange(r) {
 		s.linkEvent(r.Context(), r, sh, "download", "All files (zip)")
 	}
-	if err := s.serveZip(w, r, cleanName(sh.Name)+".zip", entries, "share:"+sh.ID, "user:"+sh.UserID); err != nil {
+	dw := &deliveryWriter{ResponseWriter: w}
+	if err := s.serveZip(dw, r, cleanName(sh.Name)+".zip", entries, "share:"+sh.ID, "user:"+sh.UserID); err != nil {
 		s.publicErr(w, r, err)
+		return
+	}
+	if sh.MaxDownloads > 0 && dw.complete() {
+		s.markDelivered(r, sh, zipKey)
 	}
 }
 

@@ -15,6 +15,7 @@ export function Files() {
   const [params, setParams] = useSearchParams();
   const folderId = params.get("folder") ?? "";
   const q = params.get("q") ?? "";
+  const highlight = params.get("highlight") ?? "";
   const [sort, setSort] = useState(() => pref("sort", "name"));
   const [listing, setListing] = useState<Listing | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -59,6 +60,18 @@ export function Files() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const go = (id: string) => setParams(id ? { folder: id } : {});
+
+  // Opened from a link ("Show in Files"): bring the file into view and make it stand out briefly.
+  useEffect(() => {
+    if (!highlight || !listing) return;
+    const el = document.querySelector<HTMLElement>(`[data-id="${CSS.escape(highlight)}"]`);
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    const t = setTimeout(() => {
+      params.delete("highlight");
+      setParams(params, { replace: true });
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [highlight, listing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sharedSet = useMemo(() => new Set(listing?.shared ?? []), [listing]);
   const allKeys = useMemo(() => [...(listing?.folders.map((f) => "d:" + f.id) ?? []), ...(listing?.files.map((f) => "f:" + f.id) ?? [])], [listing]);
@@ -152,7 +165,7 @@ export function Files() {
     const n = files.length + folders.length;
     const ok = await dialogs.confirm(
       `Delete ${n === 1 ? "this item" : n + " items"}?`,
-      `${folders.length ? "Folders are deleted with everything inside them. " : ""}Links that include these items will stop working. This can't be undone.`,
+      `${folders.length ? "Folders are deleted with everything inside them. " : ""}Links that share only these items are deleted too; other links keep their remaining files. This can't be undone.`,
       "Delete",
       true,
     );
@@ -371,7 +384,7 @@ export function Files() {
             </div>
           ))}
           {listing.files.map((f) => (
-            <div key={f.id} className={"trow" + (selected.has("f:" + f.id) ? " sel" : "")} role="row">
+            <div key={f.id} data-id={f.id} className={"trow" + (selected.has("f:" + f.id) ? " sel" : "") + (highlight === f.id ? " flash" : "")} role="row">
               <label className="cell check">
                 <input type="checkbox" aria-label={`Select ${f.name}`} checked={selected.has("f:" + f.id)} onChange={() => toggle("f:" + f.id)} />
               </label>

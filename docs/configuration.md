@@ -37,6 +37,8 @@ Settings can also be given as environment variables, which take priority over th
 
 ## Server
 
+`FERRY_WEB_APP` (default `true`): set to `false` for an **API-only** server — no browser app; the Ferry apps, share and upload links and password reset keep working. See [API-only mode](https.md#api-only-mode).
+
 | Setting | Default | Description |
 |---|---|---|
 | `FERRY_ADDR` | `:8080` | Address and port to listen on. `:8080` means all network interfaces; `127.0.0.1:8080` only this computer. |

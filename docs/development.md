@@ -122,6 +122,22 @@ LocalSend v2 (`/api/localsend/v2/info|register|prepare-upload|upload|cancel`, mu
 `GET /api/localsend/v2/ferry/offset?sessionId&fileId&token` → `{"offset":n}` and `POST …/ferry/verify?…&sha256=` (409 on mismatch). Uploads accept `&offset=n` to resume.
 Peers are pinned to the TLS certificate seen on first contact, or to the fingerprint in a scanned QR code.
 
+## Building an app (desktop, mobile, scripts)
+
+Ferry's apps use only the API, so they keep working when the web app is turned off (`FERRY_WEB_APP=false`) or when only `/api/` is exposed through a tunnel. A new client (e.g. a desktop app for Windows, macOS or Linux) needs:
+
+1. **Sign in** with `POST /api/v1/auth/login` and a `device` object (`name`, `platform`, `appVersion`, and `deviceId` on later sign-ins to keep the same device). The response has a `token`: send it as `Authorization: Bearer <token>` on every request. Two-factor accounts answer `401 totp_required`; send `code` and try again.
+2. **Identify the client** with `X-Ferry-Client: <platform>/<version> api=1`, and check `GET /api/v1/info` (`apiVersion`, `minClientApiVersion`, `capabilities`) at start-up.
+3. **Upload** with tus to `/api/v1/uploads` (any tus client library works; parallel parts are optional), and **download** with `GET /api/v1/files/{id}/content` using `Range` to resume; verify with `X-Content-SHA256`.
+4. **Receive** files sent to the device by polling `GET /api/v1/inbox` every 15 seconds while running — this also shows the device as online.
+
+Security for clients:
+- Store the token in the operating system's credential store (Windows Credential Manager, macOS Keychain, Secret Service on Linux, Android Keystore), never in plain files.
+- Refuse `http://` servers outside the local network, or warn clearly as the Android app does.
+- Tokens are revocable per device (**Devices → Remove**, or `DELETE /api/v1/devices/{id}`); sign out with `POST /api/v1/auth/logout`.
+- Browser-based clients (Electron or Tauri web views with their own origin) need that origin in `FERRY_CORS_ORIGINS`; native HTTP clients don't.
+- Cookie authentication (the web app) requires the `X-Requested-With: ferry` header on changes; bearer-token clients don't need it.
+
 ## Transfer states
 
 `created → waiting → negotiating → connecting → transferring → verifying → completed`, failures `failed | cancelled | expired | rejected | interrupted`.

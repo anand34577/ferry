@@ -116,6 +116,20 @@ func (s *Server) Cleanup(ctx context.Context) map[string]int64 {
 			res["oldShares"]++
 		}
 	}
+	// Share links whose files were all deleted (older versions kept them).
+	if rows, err := s.db.Query(ctx, `SELECT `+shareCols+` FROM shares s WHERE s.kind = 'download' AND NOT EXISTS (SELECT 1 FROM share_items si WHERE si.share_id = s.id)`); err == nil {
+		var list []*Share
+		for rows.Next() {
+			if sh, err := scanShare(rows); err == nil {
+				list = append(list, sh)
+			}
+		}
+		rows.Close()
+		for _, sh := range list {
+			s.deleteShare(ctx, sh)
+			res["emptyShares"]++
+		}
+	}
 	exec("audit", `DELETE FROM audit_log WHERE at < ?`, now-s.conf().AuditRetention.Milliseconds())
 	exec("linkEvents", `DELETE FROM share_events WHERE at < ?`, now-s.conf().AuditRetention.Milliseconds())
 	res["orphanBlobs"] = s.sweepOrphans(ctx)

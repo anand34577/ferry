@@ -20,6 +20,7 @@
 | Forgot the administrator password | Reset it on the Ferry machine: `ferry user reset-password -email you@example.com -password 'new-password'` ([how to run commands](administration.md#command-line)). |
 | Lost the phone with the authenticator app | Another administrator uses **Admin → Users → Turn off two-factor**, or on the Ferry machine: `ferry user disable-2fa -email you@example.com`. |
 | "Too many failed attempts" | Wait 15 minutes, or sign in from another network. |
+| "The first administrator account can only be created from the local network" | Open Ferry from a device on the same network as the server (e.g. `http://192.168.1.10:8080`) to create the first account, or set `FERRY_ADMIN_EMAIL` and `FERRY_ADMIN_PASSWORD` and restart. |
 | No "Forgot your password?" link | Password reset needs email settings and `FERRY_PUBLIC_URL`. |
 | Single sign-on (Keycloak etc.) fails | The sign-in page shows the reason; see [Single sign-on → Troubleshooting](sso.md#troubleshooting). |
 | Email fails with "unencrypted connection" or a certificate error | For a local SMTP relay/proxy without TLS set `FERRY_SMTP_SECURITY=none`; for self-signed certificates `FERRY_SMTP_SKIP_VERIFY=true`. Change it in **Admin → Settings → Email** and test with **Send test email**, which shows the mail server's exact error. |
@@ -44,4 +45,5 @@
 | "Identity changed … connection refused" | The other device was reinstalled or is a different device using the same address. If you trust it, remove it under **Settings → Trusted devices** and connect again. |
 | The app can't reach the server | Use the same address as in the browser. For `https://` with a self-made certificate, install the certificate on the phone. |
 | "needs a newer app" / "older Ferry" | Update the app or the server so both are current. |
+| "You've already downloaded … with this link" | One-time and limited links give each file once per recipient. Ask the sender for a new link. |
 | My phone shows as offline in the web app | A device is **online** while the Ferry app is open (it checks in every 15 seconds) or while it's receiving in the background, and goes offline about 90 seconds after that stops. Battery savers that pause apps in the background delay this; files sent meanwhile are delivered as soon as the app opens. |

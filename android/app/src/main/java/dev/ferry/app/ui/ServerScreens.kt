@@ -80,6 +80,7 @@ import androidx.navigation.NavHostController
 import dev.ferry.app.FerryApp
 import dev.ferry.app.data.ServerProfile
 import dev.ferry.app.server.ApiException
+import dev.ferry.app.server.ServerApi
 import dev.ferry.app.server.ServerManager
 import dev.ferry.app.server.ServerState
 import dev.ferry.app.transfer.Storage
@@ -137,7 +138,7 @@ private fun LoginForm(p: ServerProfile, reason: String) {
     var error by remember { mutableStateOf("") }
     var needCode by remember { mutableStateOf(false) }
     var code by remember { mutableStateOf("") }
-    val ctx = LocalContext.current
+    var notice by remember { mutableStateOf("") }
     Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         BrandMark(64.dp)
         Spacer(Modifier.height(16.dp))
@@ -175,8 +176,19 @@ private fun LoginForm(p: ServerProfile, reason: String) {
                     }
                 }
             }
+            if (notice.isNotEmpty()) Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 10.dp))
+            // Uses the API (not the website), so it also works on servers without the web app.
             TextButton(onClick = {
-                runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(p.url.trimEnd('/') + "/forgot"))) }
+                if (email.isBlank()) { error = "Enter your email above, then tap “Forgot password?” again."; return@TextButton }
+                error = ""; notice = ""
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) { ServerApi(p.url, null).post("/api/v1/auth/forgot", JSONObject().put("email", email.trim())) }
+                        notice = "If an account exists for ${email.trim()}, a link to reset the password is on its way. It works for one hour."
+                    } catch (e: Exception) {
+                        error = ServerManager.friendly(e)
+                    }
+                }
             }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Forgot password?") }
         }
     }

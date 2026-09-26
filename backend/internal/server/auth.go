@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -285,6 +286,12 @@ type loginReq struct {
 }
 
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
+	// On a fresh server the first visitor becomes the administrator. Only accept that from the local
+	// network, so a server that is already reachable from the internet can't be claimed by a stranger.
+	if ip := net.ParseIP(s.clientIP(r)); ip == nil || !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
+		s.writeErr(w, r, errf(403, "setup_local_only", "For security, the first administrator account can only be created from the local network (or set FERRY_ADMIN_EMAIL and FERRY_ADMIN_PASSWORD)."))
+		return
+	}
 	var req loginReq
 	if err := readJSON(r, &req); err != nil {
 		s.writeErr(w, r, err)

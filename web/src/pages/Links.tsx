@@ -116,6 +116,22 @@ export function Links() {
                 {s.lastAccess > 0 && <span>last opened {relativeTime(s.lastAccess)}</span>}
                 {s.shortUrl && <span className="mono">{s.shortUrl.replace(/^https?:\/\//, "")}</span>}
               </div>
+              {s.kind === "download" && (s.items?.length ?? 0) > 0 && (
+                <div className="link-items">
+                  {s.items!.slice(0, 6).map((it) => (
+                    <button
+                      key={it.id}
+                      className="item-chip"
+                      title={`Show “${it.name}” in Files`}
+                      onClick={() => navigate(it.type === "folder" ? `/files?folder=${it.id}` : `/files?folder=${it.folderId}&highlight=${it.id}`)}
+                    >
+                      <Icon name={it.type === "folder" ? "folder" : "file"} size={14} />
+                      <span className="ellipsis">{it.name}</span>
+                    </button>
+                  ))}
+                  {s.items!.length > 6 && <span className="muted small">+{s.items!.length - 6} more</span>}
+                </div>
+              )}
             </div>
             <div className="link-actions">
               <button className="btn sm" onClick={() => copy(s)} disabled={s.status === "revoked"}>

@@ -13,7 +13,7 @@
   {{if not .Share.AllowDownload}}<p class="alert info">The owner allows previewing only; downloads are disabled.</p>{{end}}
 
   {{if .Entries}}
-  {{if and .Share.AllowDownload (gt (len .Entries) 1)}}
+  {{if and .Share.AllowDownload (gt (len .Entries) 1) (not .AnyDone)}}
   <a class="btn primary block" href="/s/{{.Token}}/zip" download>Download all <span class="muted-inv">(.zip, {{size .TotalBytes}})</span></a>
   {{end}}
   <ul class="files">
@@ -23,7 +23,8 @@
       <span class="fname"><span class="name" title="{{.Path}}">{{.Path}}</span><span class="fsize">{{size .Size}}</span></span>
       <span class="actions">
         {{if .Preview}}<a class="btn ghost sm" href="/s/{{$.Token}}/f/{{.ID}}?inline=1" target="_blank" rel="noopener">Preview</a>{{end}}
-        {{if $.Share.AllowDownload}}<a class="btn sm {{if eq (len $.Entries) 1}}primary{{end}}" href="/s/{{$.Token}}/f/{{.ID}}" download>Download</a>{{end}}
+        {{if .Done}}<span class="btn sm ghost" aria-disabled="true">Downloaded</span>
+        {{else if $.Share.AllowDownload}}<a class="btn sm {{if eq (len $.Entries) 1}}primary{{end}}" href="/s/{{$.Token}}/f/{{.ID}}" download>Download</a>{{end}}
       </span>
     </li>
     {{end}}

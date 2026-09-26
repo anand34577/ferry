@@ -463,3 +463,9 @@ input[type="checkbox"], input[type="radio"] { min-height: 0; width: 18px; height
 .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .settings-groups { display: flex; flex-direction: column; gap: 16px; }
 .settings-groups .hint code, .settings-groups p code { font-size: 0.8em; }
+.link-items { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; min-width: 0; }
+.item-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 260px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--text); font: inherit; font-size: 0.8rem; cursor: pointer; }
+.item-chip svg { color: var(--muted); flex: none; }
+.item-chip:hover { border-color: var(--accent); color: var(--accent); }
+.trow.flash { animation: flash 2.4s ease-out; }
+@keyframes flash { 0%, 40% { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); } }

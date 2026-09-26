@@ -49,10 +49,11 @@ type Share struct {
 }
 
 type shareItem struct {
-	Type string `json:"type"` // file | folder
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Size int64  `json:"size,omitempty"`
+	Type     string `json:"type"` // file | folder
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Size     int64  `json:"size,omitempty"`
+	FolderID string `json:"folderId"` // where a shared file lives ("" = My files), to open it from the link
 }
 
 const shareCols = `s.id, s.token, s.user_id, s.kind, s.name, s.message, s.password_hash, s.expires_at, s.max_downloads, s.download_count,
@@ -100,7 +101,7 @@ func (s *Server) getShare(ctx context.Context, userID, id string) (*Share, error
 }
 
 func (s *Server) shareItems(ctx context.Context, sh *Share) ([]shareItem, error) {
-	rows, err := s.db.Query(ctx, `SELECT si.item_type, si.item_id, COALESCE(f.name, fo.name, ''), COALESCE(f.size, 0)
+	rows, err := s.db.Query(ctx, `SELECT si.item_type, si.item_id, COALESCE(f.name, fo.name, ''), COALESCE(f.size, 0), COALESCE(f.folder_id, '')
 		FROM share_items si
 		LEFT JOIN files f ON si.item_type = 'file' AND f.id = si.item_id
 		LEFT JOIN folders fo ON si.item_type = 'folder' AND fo.id = si.item_id
@@ -112,7 +113,7 @@ func (s *Server) shareItems(ctx context.Context, sh *Share) ([]shareItem, error)
 	items := []shareItem{}
 	for rows.Next() {
 		var it shareItem
-		if err := rows.Scan(&it.Type, &it.ID, &it.Name, &it.Size); err != nil {
+		if err := rows.Scan(&it.Type, &it.ID, &it.Name, &it.Size, &it.FolderID); err != nil {
 			return nil, err
 		}
 		if it.Name != "" {
@@ -161,18 +162,24 @@ func (s *Server) handleListShares(w http.ResponseWriter, r *http.Request) {
 		shares = append(shares, sh)
 	}
 	rows.Close()
-	counts := map[string]int{}
-	if rows, err := s.db.Query(ctx, `SELECT si.share_id, COUNT(*) FROM share_items si JOIN shares s ON s.id = si.share_id WHERE s.user_id = ? GROUP BY si.share_id`, u.ID); err == nil {
+	items := map[string][]shareItem{}
+	if rows, err := s.db.Query(ctx, `SELECT si.share_id, si.item_type, si.item_id, COALESCE(f.name, fo.name, ''), COALESCE(f.size, 0), COALESCE(f.folder_id, '')
+		FROM share_items si JOIN shares s ON s.id = si.share_id
+		LEFT JOIN files f ON si.item_type = 'file' AND f.id = si.item_id
+		LEFT JOIN folders fo ON si.item_type = 'folder' AND fo.id = si.item_id
+		WHERE s.user_id = ?`, u.ID); err == nil {
 		for rows.Next() {
-			var id string
-			var n int
-			rows.Scan(&id, &n)
-			counts[id] = n
+			var sid string
+			var it shareItem
+			if rows.Scan(&sid, &it.Type, &it.ID, &it.Name, &it.Size, &it.FolderID) == nil && it.Name != "" {
+				items[sid] = append(items[sid], it)
+			}
 		}
 		rows.Close()
 	}
 	for _, sh := range shares {
-		sh.ItemCount = counts[sh.ID]
+		sh.Items = items[sh.ID]
+		sh.ItemCount = len(sh.Items)
 	}
 	writeJSON(w, 200, map[string]any{"shares": shares})
 }

@@ -14,6 +14,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -93,6 +94,12 @@ func (s *Server) clientIP(r *http.Request) string {
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !s.trusted(ip) {
+		if r.Header.Get("X-Forwarded-For") != "" {
+			proxyWarning.Do(func() {
+				s.log.Warn("requests arrive through a proxy that isn't trusted, so every visitor appears to come from the proxy's address "+
+					"(rate limits, sign-in lockouts and logs then apply to everyone together); set FERRY_TRUSTED_PROXIES", "proxy", host)
+			})
+		}
 		return host
 	}
 	parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
@@ -107,6 +114,8 @@ func (s *Server) clientIP(r *http.Request) string {
 	}
 	return host
 }
+
+var proxyWarning sync.Once
 
 func (s *Server) trusted(ip net.IP) bool {
 	for _, n := range s.conf().TrustedProxies {

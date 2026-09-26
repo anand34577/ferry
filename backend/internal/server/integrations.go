@@ -6,15 +6,35 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"syscall"
 	"time"
 )
 
 var outbound = &http.Client{Timeout: 10 * time.Second}
+
+// publicOnly refuses connections to loopback, private and link-local addresses. The check runs on
+// the resolved IP at connect time, so DNS tricks can't point it at the local network.
+var publicOnly = &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+	Proxy: nil,
+	DialContext: (&net.Dialer{Timeout: 10 * time.Second, Control: func(_, address string, _ syscall.RawConn) error {
+		host, _, _ := net.SplitHostPort(address)
+		ip := net.ParseIP(host)
+		if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+			return errors.New("addresses on the server's own network aren't allowed")
+		}
+		return nil
+	}}).DialContext,
+}}
+
+// openServer reports whether strangers can get an account (sign-up or SSO auto-create).
+func (s *Server) openServer() bool { return s.conf().AllowSignup || s.conf().OIDC.AutoCreate }
 
 // ---------- Gotify ----------
 
@@ -32,9 +52,13 @@ func cleanGotifyURL(v string) (string, error) {
 
 // gotify pushes a message to the user's own Gotify server; a no-op when they haven't set one up.
 func (s *Server) gotify(ctx context.Context, userID, title, message string) error {
-	var gURL, tok string
-	if err := s.db.QueryRow(ctx, `SELECT gotify_url, gotify_token FROM users WHERE id = ?`, userID).Scan(&gURL, &tok); err != nil || gURL == "" || tok == "" {
+	var gURL, tok, role string
+	if err := s.db.QueryRow(ctx, `SELECT gotify_url, gotify_token, role FROM users WHERE id = ?`, userID).Scan(&gURL, &tok, &role); err != nil || gURL == "" || tok == "" {
 		return err
+	}
+	client := outbound
+	if s.openServer() && role != "admin" {
+		client = publicOnly // on open servers, users can't make the server reach its local network
 	}
 	body, _ := json.Marshal(map[string]any{"title": title, "message": message, "priority": 5})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gURL+"/message", bytes.NewReader(body))
@@ -43,7 +67,7 @@ func (s *Server) gotify(ctx context.Context, userID, title, message string) erro
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Gotify-Key", tok)
-	res, err := outbound.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		return err
 	}
