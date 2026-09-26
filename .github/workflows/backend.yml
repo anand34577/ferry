@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: backend/go.mod, cache-dependency-path: backend/go.sum }
+        with: { go-version: "1.26.x", check-latest: true, cache-dependency-path: backend/go.sum }
       - name: Formatting
         run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "::error::run gofmt -w ."; exit 1; }
       - run: go vet ./...
