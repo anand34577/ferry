@@ -38,25 +38,26 @@ var webuiFS embed.FS
 var templatesFS embed.FS
 
 type Server struct {
-	cfgp    atomic.Pointer[config.Config] // current settings; replaced when an admin saves settings
-	base    *config.Config                // settings from the environment, before admin overrides
-	cfgMu   sync.Mutex                    // serializes settings changes
-	db      *db.DB
-	store   storage.Backend
-	log     *slog.Logger
-	logs    *LogRing
-	version string
-	started time.Time
-	secret  []byte
-	tmpl    *template.Template
-	limiter *limiter
-	streams *streams
-	metrics metrics
-	mux     *http.ServeMux
-	scanMu  sync.Mutex
-	zips    sync.Map                             // ticket → *zipTicket
-	mail    func(to, subject, body string) error // sendMail; replaced in tests
-	oidc    oidcClient
+	cfgp       atomic.Pointer[config.Config] // current settings; replaced when an admin saves settings
+	base       *config.Config                // settings from the environment, before admin overrides
+	cfgMu      sync.Mutex                    // serializes settings changes
+	db         *db.DB
+	store      storage.Backend
+	log        *slog.Logger
+	logs       *LogRing
+	version    string
+	started    time.Time
+	secret     []byte
+	tmpl       *template.Template
+	limiter    *limiter
+	streams    *streams
+	metrics    metrics
+	mux        *http.ServeMux
+	scanMu     sync.Mutex
+	zips       sync.Map                             // ticket → *zipTicket
+	deviceSeen sync.Map                             // device ID → last last_seen write (ms)
+	mail       func(to, subject, body string) error // sendMail; replaced in tests
+	oidc       oidcClient
 }
 
 type metrics struct {
@@ -383,6 +384,16 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// ReadFrom keeps the underlying writer's zero-copy path (sendfile on Linux) for file downloads.
+func (w *statusWriter) ReadFrom(src io.Reader) (int64, error) {
+	if w.status == 0 {
+		w.status = 200
+	}
+	n, err := io.Copy(w.ResponseWriter, src)
+	w.bytes += n
+	return n, err
+}
 func (w *statusWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()

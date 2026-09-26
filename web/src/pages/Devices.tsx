@@ -3,10 +3,11 @@ import { del, get, patch, type Device } from "../lib/api";
 import { formatDate, relativeTime } from "../lib/format";
 import { useAuth } from "../lib/auth";
 import { Icon } from "../components/Icon";
-import { EmptyState, ErrorBox, Loading, Menu, QR, useAsync, useDialogs, useToast } from "../components/ui";
+import { EmptyState, ErrorBox, Loading, Menu, QR, useAsync, useDialogs, useEvery, useToast } from "../components/ui";
 
 export function Devices() {
   const { data, error, loading, reload } = useAsync(() => get<{ devices: Device[] }>("/api/v1/devices"), []);
+  useEvery(reload, 20000);
   const { info } = useAuth();
   const toast = useToast();
   const dialogs = useDialogs();
@@ -53,7 +54,7 @@ export function Devices() {
               <div className="link-title">
                 <Icon name={d.platform === "android" ? "phone" : "laptop"} size={20} />
                 <strong className="ellipsis">{d.name}</strong>
-                <span className={"chip " + (d.online ? "ok" : "muted")}>{d.online ? "Receiving" : "Offline"}</span>
+                <span className={"chip " + (d.online ? "ok" : "muted")}>{d.online ? "Online" : "Offline"}</span>
               </div>
               <div className="link-meta muted small">
                 <span>{d.platform}{d.appVersion ? ` · app ${d.appVersion}` : ""}</span>

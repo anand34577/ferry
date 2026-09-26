@@ -30,7 +30,7 @@
   var input = form.querySelector('input[type=file]');
   var queue = document.getElementById("queue");
   var drop = document.getElementById("drop");
-  var CHUNK = 16 * 1024 * 1024;
+  var CHUNK = 32 * 1024 * 1024;
 
   function b64(s) {
     var bytes = new TextEncoder().encode(s), bin = "";

@@ -787,10 +787,11 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, f *File, inli
 		s.storageErr(w, r, f, err)
 		return
 	}
-	defer rc.Close()
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer s.streams.add(append(streamKeys, f.ID), cancel)()
+	// Closing the file is what stops a revoked download: it also interrupts a zero-copy sendfile.
+	go func() { <-ctx.Done(); rc.Close() }()
 	s.metrics.downloadsActive.Add(1)
 	defer s.metrics.downloadsActive.Add(-1)
 
@@ -815,7 +816,7 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, f *File, inli
 	h.Set("Cache-Control", "private, no-cache")
 	h.Set("ETag", `"`+f.SHA256+`"`)
 	h.Set("X-Content-SHA256", f.SHA256)
-	http.ServeContent(w, r.WithContext(ctx), "", time.UnixMilli(f.UpdatedAt), ctxReadSeeker{ctx, rc})
+	http.ServeContent(w, r.WithContext(ctx), "", time.UnixMilli(f.UpdatedAt), rc)
 }
 
 func (s *Server) storageErr(w http.ResponseWriter, r *http.Request, f *File, err error) {

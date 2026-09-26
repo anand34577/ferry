@@ -26,6 +26,9 @@ type Device struct {
 // presenceTTL: devices re-announce every 60 s while receiving; older presence is ignored.
 const presenceTTL = 3 * 60 * 1000
 
+// activeTTL: an open app checks in every 15 s, so a device seen within this window is online.
+const activeTTL = 90 * 1000
+
 func (s *Server) listDevices(r *http.Request, userID string) ([]*Device, error) {
 	q := `SELECT d.id, d.name, d.platform, d.app_version, d.fingerprint, d.lan_addrs, d.lan_port, d.lan_protocol, d.presence_at, d.last_seen, d.created_at, u.email
 		FROM devices d JOIN users u ON u.id = d.user_id`
@@ -47,6 +50,7 @@ func (s *Server) listDevices(r *http.Request, userID string) ([]*Device, error) 
 		if err := rows.Scan(&d.ID, &d.Name, &d.Platform, &d.AppVersion, &d.Fingerprint, &addrs, &d.LanPort, &d.LanProtocol, &d.PresenceAt, &d.LastSeen, &d.CreatedAt, &d.UserEmail); err != nil {
 			return nil, err
 		}
+		d.Online = now-d.LastSeen < activeTTL
 		if now-d.PresenceAt < presenceTTL && addrs != "" {
 			d.Online = true
 			d.LanAddrs = strings.Split(addrs, ",")

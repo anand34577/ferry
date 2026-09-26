@@ -368,6 +368,16 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]) {
   return { ...state, reload: () => setTick((t) => t + 1) };
 }
 
+/** Calls fn every ms while the tab is visible (e.g. to keep device status fresh). */
+export function useEvery(fn: () => void, ms: number) {
+  const ref = useRef(fn);
+  ref.current = fn;
+  useEffect(() => {
+    const t = setInterval(() => document.hidden || ref.current(), ms);
+    return () => clearInterval(t);
+  }, [ms]);
+}
+
 export function ErrorBox({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const msg = error instanceof Error ? error.message : "Something went wrong.";
   return (

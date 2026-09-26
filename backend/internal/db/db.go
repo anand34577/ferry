@@ -388,4 +388,6 @@ CREATE TABLE user_identities (
   UNIQUE (issuer, subject)
 );
 CREATE INDEX user_identities_user ON user_identities(user_id)
+`, `
+ALTER TABLE users ADD COLUMN prefs TEXT NOT NULL DEFAULT '{}'
 `}

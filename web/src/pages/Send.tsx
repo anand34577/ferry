@@ -4,7 +4,7 @@ import { ApiError, get, patch, post, type Device, type Folder, type Listing, typ
 import { formatBytes, isFinalStatus, relativeTime, statusLabel } from "../lib/format";
 import { uploads, useUploads } from "../lib/uploads";
 import { Icon } from "../components/Icon";
-import { CopyField, FileBadge, Progress, QR, useAsync, useToast } from "../components/ui";
+import { CopyField, FileBadge, Progress, QR, useAsync, useEvery, useToast } from "../components/ui";
 import { ShareDialog, type ShareTarget } from "../components/ShareDialog";
 
 // The "Send" flow: pick files → choose a link or one of my devices → watch it arrive.
@@ -22,6 +22,7 @@ export function Send() {
   const toast = useToast();
   const navigate = useNavigate();
   const devices = useAsync(() => get<{ devices: Device[] }>("/api/v1/devices"), []);
+  useEvery(() => phase === "pick" && devices.reload(), 20000);
   const items = useUploads();
   const total = files.reduce((a, f) => a + f.size, 0);
 

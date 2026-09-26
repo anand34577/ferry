@@ -271,7 +271,7 @@ func (s *Server) tusDelete(w http.ResponseWriter, r *http.Request, up *upload, e
 	w.WriteHeader(204)
 }
 
-const progressEvery = 8 << 20
+const progressEvery = 32 << 20 // progress (fsync + DB write) is saved at least this often, and on every disconnect
 
 func (s *Server) tusPatch(w http.ResponseWriter, r *http.Request, up *upload, owner *User, share *Share) {
 	tusHeaders(w)
@@ -326,7 +326,7 @@ func (s *Server) tusPatch(w http.ResponseWriter, r *http.Request, up *upload, ow
 
 	remaining := up.Size - up.Received
 	body := countingReader{io.LimitReader(r.Body, remaining+1), &s.metrics.bytesIn}
-	buf := make([]byte, 256<<10)
+	buf := make([]byte, 1<<20)
 	sinceSave := int64(0)
 	save := func() error {
 		if sy, ok := wc.(interface{ Sync() error }); ok {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -247,7 +248,11 @@ func (s *Server) authToken(ctx context.Context, tok string, cookie bool) (*authI
 	// Sliding expiry, written at most every 5 minutes to keep writes low.
 	if now-lastSeen > 5*60*1000 {
 		s.db.Exec(ctx, `UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id = ?`, now, now+s.conf().SessionTTL.Milliseconds(), sid)
-		if deviceID != "" {
+	}
+	// Devices: at most every 30 s, so "online" reflects an open app (it checks in every 15 s).
+	if deviceID != "" {
+		if last, ok := s.deviceSeen.Load(deviceID); !ok || now-last.(int64) > 30*1000 {
+			s.deviceSeen.Store(deviceID, now)
 			s.db.Exec(ctx, `UPDATE devices SET last_seen = ? WHERE id = ?`, now, deviceID)
 		}
 	}
@@ -475,9 +480,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	a := authOf(r)
 	var gURL, gTok string
 	s.db.QueryRow(r.Context(), `SELECT gotify_url, gotify_token FROM users WHERE id = ?`, a.user.ID).Scan(&gURL, &gTok)
-	var pwHash string
-	s.db.QueryRow(r.Context(), `SELECT password_hash FROM users WHERE id = ?`, a.user.ID).Scan(&pwHash)
-	resp := map[string]any{"user": a.user, "deviceId": a.deviceID, "gotifyUrl": gURL, "gotifyConfigured": gURL != "" && gTok != "", "hasPassword": pwHash != ""}
+	var pwHash, prefs string
+	s.db.QueryRow(r.Context(), `SELECT password_hash, prefs FROM users WHERE id = ?`, a.user.ID).Scan(&pwHash, &prefs)
+	resp := map[string]any{"user": a.user, "deviceId": a.deviceID, "gotifyUrl": gURL, "gotifyConfigured": gURL != "" && gTok != "", "hasPassword": pwHash != "",
+		"prefs": json.RawMessage(firstNonEmpty(prefs, "{}"))}
 	if c, err := r.Cookie(adminReturnCookie); err == nil {
 		if adm, err := s.authToken(r.Context(), c.Value, true); err == nil && adm.user.Role == "admin" {
 			resp["impersonator"] = adm.user.Email
@@ -491,6 +497,8 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 		Name        *string `json:"name"`
 		GotifyURL   *string `json:"gotifyUrl"`
 		GotifyToken *string `json:"gotifyToken"`
+		// Prefs are merged into the saved ones (theme, sort order, …) so every browser looks the same.
+		Prefs map[string]json.RawMessage `json:"prefs"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		s.writeErr(w, r, err)
@@ -509,6 +517,33 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		u.Name = name
+	}
+	if req.Prefs != nil && req.Name == nil && req.GotifyURL == nil {
+		if f, ok := ctx.Value(auditKey).(*auditFlag); ok {
+			f.done = true // appearance and sort preferences aren't worth an audit entry
+		}
+	}
+	if req.Prefs != nil {
+		var cur string
+		s.db.QueryRow(ctx, `SELECT prefs FROM users WHERE id = ?`, u.ID).Scan(&cur)
+		merged := map[string]json.RawMessage{}
+		json.Unmarshal([]byte(cur), &merged)
+		for k, v := range req.Prefs {
+			if string(v) == "null" {
+				delete(merged, k)
+			} else {
+				merged[k] = v
+			}
+		}
+		b, _ := json.Marshal(merged)
+		if len(b) > 8<<10 || len(merged) > 50 {
+			s.writeErr(w, r, errf(400, "prefs_too_large", "Too many preferences."))
+			return
+		}
+		if _, err := s.db.Exec(ctx, `UPDATE users SET prefs = ? WHERE id = ?`, string(b), u.ID); err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
 	}
 	if req.GotifyURL != nil {
 		gURL, err := cleanGotifyURL(*req.GotifyURL)

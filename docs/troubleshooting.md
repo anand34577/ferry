@@ -44,3 +44,4 @@
 | "Identity changed … connection refused" | The other device was reinstalled or is a different device using the same address. If you trust it, remove it under **Settings → Trusted devices** and connect again. |
 | The app can't reach the server | Use the same address as in the browser. For `https://` with a self-made certificate, install the certificate on the phone. |
 | "needs a newer app" / "older Ferry" | Update the app or the server so both are current. |
+| My phone shows as offline in the web app | A device is **online** while the Ferry app is open (it checks in every 15 seconds) or while it's receiving in the background, and goes offline about 90 seconds after that stops. Battery savers that pause apps in the background delay this; files sent meanwhile are delivered as soon as the app opens. |

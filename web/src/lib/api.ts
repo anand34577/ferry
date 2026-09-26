@@ -117,6 +117,7 @@ export interface Me {
   gotifyConfigured: boolean;
   hasPassword: boolean;
   impersonator?: string;
+  prefs?: Record<string, unknown>;
 }
 
 export interface Device {

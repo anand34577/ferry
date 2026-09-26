@@ -121,7 +121,7 @@ export function Dashboard() {
                 <Icon name={d.platform === "android" ? "phone" : "laptop"} size={18} />
                 <span className="ellipsis">{d.name}</span>
                 <span className={"dot " + (d.online ? "on" : "")} aria-label={d.online ? "online" : "offline"} />
-                <span className="muted small">{d.online ? "Receiving now" : "seen " + relativeTime(d.lastSeen)}</span>
+                <span className="muted small">{d.online ? "Online" : "seen " + relativeTime(d.lastSeen)}</span>
               </li>
             ))}
           </ul>

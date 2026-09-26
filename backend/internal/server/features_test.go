@@ -235,3 +235,30 @@ func TestAdminSettings(t *testing.T) {
 	}
 	newClient(t, ts.URL).json("GET", "/api/v1/admin/settings", nil, 401)
 }
+
+// A device that has the app open (it checks in regularly) shows as online; preferences follow the account.
+func TestDeviceOnlineAndPrefs(t *testing.T) {
+	_, ts := newTestServer(t, nil)
+	adm := setupAdmin(t, ts)
+	app := newClient(t, ts.URL)
+	m := app.json("POST", "/api/v1/auth/login", map[string]any{"email": "admin@example.com", "password": "correct-horse",
+		"device": map[string]string{"name": "Phone", "platform": "android"}}, 200)
+	app.token = m["token"].(string)
+	app.json("GET", "/api/v1/inbox", nil, 200)
+	devs := adm.json("GET", "/api/v1/devices", nil, 200)["devices"].([]any)
+	if len(devs) != 1 || devs[0].(map[string]any)["online"] != true {
+		t.Fatalf("device should be online: %v", devs)
+	}
+
+	adm.json("PATCH", "/api/v1/me", map[string]any{"prefs": map[string]any{"theme": "nord", "sort": "date:desc"}}, 200)
+	adm.json("PATCH", "/api/v1/me", map[string]any{"prefs": map[string]any{"sort": nil}}, 200)
+	other := newClient(t, ts.URL) // another browser, same account
+	other.json("POST", "/api/v1/auth/login", map[string]string{"email": "admin@example.com", "password": "correct-horse"}, 200)
+	p := other.json("GET", "/api/v1/me", nil, 200)["prefs"].(map[string]any)
+	if p["theme"] != "nord" || p["sort"] != nil {
+		t.Fatalf("prefs: %v", p)
+	}
+	if ev := adm.json("GET", "/api/v1/admin/audit?q=profile_updated", nil, 200)["events"].([]any); len(ev) != 0 {
+		t.Fatalf("preference changes shouldn't be audited: %v", ev)
+	}
+}

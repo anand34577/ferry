@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { CLIENT_API_VERSION, get, onUnauthorized, post, type Me, type ServerInfo, type User } from "./api";
+import { CLIENT_API_VERSION, get, onUnauthorized, patch, post, type Me, type ServerInfo, type User } from "./api";
 import { setServerTime } from "./format";
 
 interface AuthState {
@@ -41,7 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         else if (i.apiVersion < CLIENT_API_VERSION) setCompat(`The server runs an older Ferry (${i.version}). Ask the administrator to update it.`);
         try {
           const m = await get<Me>("/api/v1/me");
-          if (alive) (setUser(m.user), setMe(m));
+          if (alive) (setUser(m.user), setMe(m), adoptPrefs(m.prefs));
         } catch {
           const s = await get<{ needed: boolean }>("/api/v1/setup").catch(() => ({ needed: false }));
           if (alive) {
@@ -62,10 +62,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => onUnauthorized(() => setUser(null)), []);
 
-  const refreshMe = useCallback(() => get<Me>("/api/v1/me").then((m) => (setUser(m.user), setMe(m))), []);
+  const refreshMe = useCallback(() => get<Me>("/api/v1/me").then((m) => (setUser(m.user), setMe(m), adoptPrefs(m.prefs))), []);
 
   const logout = useCallback(async () => {
     await post("/api/v1/auth/logout").catch(() => {});
+    signedIn = false;
     setUser(null);
   }, []);
 
@@ -97,18 +98,15 @@ export const THEMES = [
 export type Theme = (typeof THEMES)[number][0];
 export function getTheme(): Theme {
   try {
-    const t = localStorage.getItem("ferry-theme");
+    const t = pref<string>("theme", "") || localStorage.getItem("ferry-theme");
     return THEMES.some((x) => x[0] === t) ? (t as Theme) : "system";
   } catch {
     return "system";
   }
 }
-export function applyTheme(t: Theme) {
-  try {
-    localStorage.setItem("ferry-theme", t);
-  } catch {
-    /* private mode */
-  }
+/** Applies a theme and saves it to the account (so every browser looks the same). */
+export function applyTheme(t: Theme, save = true) {
+  if (save) setPref("theme", t);
   const def = THEMES.find((x) => x[0] === t) ?? THEMES[0];
   const root = document.documentElement.dataset;
   if (def[0] === "system") delete root.theme;
@@ -117,7 +115,27 @@ export function applyTheme(t: Theme) {
   else delete root.mode;
 }
 
-// Small persisted per-browser preferences.
+// ---------- preferences ----------
+// Saved in the account; the browser keeps a copy so the page looks right before sign-in finishes.
+let signedIn = false;
+const pending: Record<string, unknown> = {};
+let flush: ReturnType<typeof setTimeout> | undefined;
+
+function adoptPrefs(p: Record<string, unknown> | undefined) {
+  signedIn = true;
+  for (const [k, v] of Object.entries(p ?? {})) {
+    try {
+      localStorage.setItem("ferry-pref-" + k, JSON.stringify(v));
+    } catch {
+      /* private mode */
+    }
+  }
+  const t = p?.theme;
+  if (typeof t === "string" && THEMES.some((x) => x[0] === t)) applyTheme(t as Theme, false);
+  else if (t === undefined && getTheme() !== "system") setPref("theme", getTheme()); // carry over a theme picked before accounts stored it
+  window.dispatchEvent(new Event("ferry-prefs"));
+}
+
 export function pref<T>(key: string, def: T): T {
   try {
     const v = localStorage.getItem("ferry-pref-" + key);
@@ -126,10 +144,19 @@ export function pref<T>(key: string, def: T): T {
     return def;
   }
 }
+
 export function setPref(key: string, v: unknown) {
   try {
     localStorage.setItem("ferry-pref-" + key, JSON.stringify(v));
   } catch {
     /* ignore */
   }
+  if (!signedIn) return;
+  pending[key] = v;
+  clearTimeout(flush);
+  flush = setTimeout(() => {
+    const prefs = { ...pending };
+    for (const k of Object.keys(pending)) delete pending[k];
+    patch("/api/v1/me", { prefs }).catch(() => {});
+  }, 400);
 }

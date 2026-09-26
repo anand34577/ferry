@@ -135,7 +135,7 @@ class UploadManager {
     job.lastSent = 0;
     const upload = new tus.Upload(file, {
       endpoint: "/api/v1/uploads",
-      chunkSize: 16 * 1024 * 1024,
+      chunkSize: 32 * 1024 * 1024, // under Cloudflare's 100 MB request limit; progress is saved server-side mid-chunk too
       retryDelays: [0, 1000, 3000, 5000, 10000, 20000, 30000, 60000],
       metadata: meta,
       headers: { "X-Requested-With": "ferry", "X-Ferry-Client": CLIENT_HEADER },
@@ -147,17 +147,15 @@ class UploadManager {
         return !s || s >= 500 || s === 409 || s === 423 || s === 429;
       },
       onProgress: (sent) => {
+        // At most a few UI updates per second: re-rendering on every progress event slows big batches down.
         const now = performance.now();
         const dt = (now - job.lastT) / 1000;
-        if (dt >= 0.5) {
-          const inst = (sent - job.lastSent) / dt;
-          const prev = this.get(id).speed;
-          this.set(id, { sent, speed: prev ? prev * 0.6 + inst * 0.4 : inst });
-          job.lastT = now;
-          job.lastSent = sent;
-        } else {
-          this.set(id, { sent });
-        }
+        if (dt < 0.25) return;
+        const inst = (sent - job.lastSent) / dt;
+        const prev = this.get(id).speed;
+        this.set(id, { sent, speed: prev ? prev * 0.75 + inst * 0.25 : inst });
+        job.lastT = now;
+        job.lastSent = sent;
       },
       onError: (err) => {
         const res = (err as tus.DetailedError).originalResponse;
@@ -231,7 +229,20 @@ class UploadManager {
   }
 }
 
-export async function sha256File(file: Blob, abort: { aborted: boolean }): Promise<string> {
+/** SHA-256 of a file, in a Web Worker when available. Resolves "" when aborted. */
+export function sha256File(file: Blob, abort: { aborted: boolean }): Promise<string> {
+  if (typeof Worker === "undefined") return sha256Inline(file, abort);
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL("./hash.worker.ts", import.meta.url), { type: "module" });
+    const poll = setInterval(() => abort.aborted && done(() => resolve("")), 300);
+    const done = (fn: () => void) => (clearInterval(poll), w.terminate(), fn());
+    w.onmessage = (e: MessageEvent<{ hash?: string; error?: string }>) => done(() => (e.data.hash !== undefined ? resolve(e.data.hash) : reject(new Error(e.data.error))));
+    w.onerror = () => done(() => sha256Inline(file, abort).then(resolve, reject)); // e.g. workers blocked
+    w.postMessage(file);
+  });
+}
+
+async function sha256Inline(file: Blob, abort: { aborted: boolean }): Promise<string> {
   const h = await createSHA256();
   h.init();
   const step = 8 * 1024 * 1024;
