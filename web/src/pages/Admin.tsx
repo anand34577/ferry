@@ -1,20 +1,24 @@
-import { useState } from "react";
-import { del, get, patch, post, type Device, type Share, type User } from "../lib/api";
+import { useEffect, useState } from "react";
+import { del, get, patch, post, shareLink, type Device, type Share, type User } from "../lib/api";
+import { LinkAnalyticsDialog } from "../components/LinkAnalytics";
+import { ServerSettings } from "../components/ServerSettings";
 import { formatBytes, formatDate, relativeTime } from "../lib/format";
 import { useAuth } from "../lib/auth";
 import { Icon } from "../components/Icon";
-import { ErrorBox, Loading, Menu, Modal, StatusChip, Switch, useAsync, useDialogs, useToast } from "../components/ui";
+import { EmptyState, ErrorBox, Loading, Menu, Modal, StatusChip, Switch, useAsync, useDialogs, useToast } from "../components/ui";
 
-type Tab = "overview" | "users" | "links" | "devices" | "audit" | "system";
+type Tab = "overview" | "users" | "links" | "devices" | "audit" | "settings" | "system";
 
 export function Admin() {
   const [tab, setTab] = useState<Tab>("overview");
+  const [auditUser, setAuditUser] = useState<{ id: string; email: string } | null>(null);
   const tabs: [Tab, string][] = [
     ["overview", "Overview"],
     ["users", "Users"],
     ["links", "Links"],
     ["devices", "Devices"],
     ["audit", "Audit log"],
+    ["settings", "Settings"],
     ["system", "System"],
   ];
   return (
@@ -27,16 +31,17 @@ export function Admin() {
       </header>
       <div className="tabs" role="tablist">
         {tabs.map(([k, l]) => (
-          <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
+          <button key={k} role="tab" aria-selected={tab === k} onClick={() => (setTab(k), k !== "audit" && setAuditUser(null))}>
             {l}
           </button>
         ))}
       </div>
       {tab === "overview" && <Overview />}
-      {tab === "users" && <Users />}
+      {tab === "users" && <Users onActivity={(u) => (setAuditUser(u), setTab("audit"))} />}
       {tab === "links" && <AdminLinks />}
       {tab === "devices" && <AdminDevices />}
-      {tab === "audit" && <Audit />}
+      {tab === "audit" && <Audit user={auditUser} clearUser={() => setAuditUser(null)} />}
+      {tab === "settings" && <ServerSettings />}
       {tab === "system" && <System />}
     </div>
   );
@@ -92,10 +97,10 @@ function Overview() {
   );
 }
 
-type AdminUser = User & { usedBytes: number; fileCount: number; lastActive: number; effectiveQuotaBytes: number };
+type AdminUser = User & { usedBytes: number; fileCount: number; lastActive: number; effectiveQuotaBytes: number; ssoLinks: number; hasPassword: boolean };
 const GB = 1024 ** 3;
 
-function Users() {
+function Users({ onActivity }: { onActivity: (u: { id: string; email: string }) => void }) {
   const { user: me } = useAuth();
   const { data, error, reload } = useAsync(() => get<{ users: AdminUser[]; defaultQuotaBytes: number }>("/api/v1/admin/users"), []);
   const [editing, setEditing] = useState<AdminUser | "new" | null>(null);
@@ -138,7 +143,8 @@ function Users() {
                   <div className="muted small">{u.email}</div>
                 </td>
                 <td>
-                  <span className={"chip " + (u.role === "admin" ? "info" : "muted")}>{u.role}</span> {u.disabled && <span className="chip warn">disabled</span>}
+                  <span className={"chip " + (u.role === "admin" ? "info" : "muted")}>{u.role}</span> {u.disabled && <span className="chip warn">disabled</span>}{" "}
+                  {u.ssoLinks > 0 && <span className="chip ok" title={u.hasPassword ? "Signs in with SSO or password" : "Signs in with SSO only"}>SSO</span>}
                 </td>
                 <td>
                   {formatBytes(u.usedBytes)}
@@ -152,6 +158,39 @@ function Users() {
                   <Menu
                     items={[
                       { label: "Edit", icon: "edit", onClick: () => setEditing(u) },
+                      { label: "Activity", icon: "clock", onClick: () => onActivity({ id: u.id, email: u.email }) },
+                      u.id !== me?.id &&
+                        !u.disabled && {
+                          label: "Sign in as this user",
+                          icon: "users",
+                          onClick: async () => {
+                            const ok = await dialogs.confirm(
+                              `Sign in as ${u.email}?`,
+                              "You'll see and can change everything they can, for up to one hour. Everything you do is recorded in the audit log. Use “Return to admin” in the banner to come back.",
+                              "Sign in as user",
+                            );
+                            if (!ok) return;
+                            try {
+                              await post(`/api/v1/admin/users/${u.id}/impersonate`);
+                              window.location.assign("/");
+                            } catch (e) {
+                              toast.error(e);
+                            }
+                          },
+                        },
+                      u.ssoLinks > 0 && {
+                        label: "Disconnect SSO",
+                        icon: "link",
+                        onClick: async () => {
+                          const warn = u.hasPassword ? "They can connect again from Settings or by signing in with SSO." : "They have no password: set one with Edit first, or they won't be able to sign in.";
+                          if (await dialogs.confirm(`Disconnect SSO for ${u.email}?`, warn, "Disconnect", true)) act(() => del(`/api/v1/admin/users/${u.id}/identities`), "SSO disconnected");
+                        },
+                      },
+                      u.id !== me?.id && {
+                        label: "Sign out everywhere",
+                        icon: "logout",
+                        onClick: () => act(() => post(`/api/v1/admin/users/${u.id}/signout`), "User signed out of all devices"),
+                      },
                       u.id !== me?.id &&
                         (u.disabled
                           ? { label: "Enable", icon: "check", onClick: () => act(() => patch(`/api/v1/admin/users/${u.id}`, { disabled: false }), "User enabled") }
@@ -274,19 +313,30 @@ function UserDialog({ user, self, defaultQuota, onClose, onSaved }: { user: Admi
 function AdminLinks() {
   const { data, error, reload } = useAsync(() => get<{ shares: (Share & { ownerEmail: string })[] }>("/api/v1/admin/shares"), []);
   const toast = useToast();
+  const dialogs = useDialogs();
   const [filter, setFilter] = useState<"active" | "all">("active");
+  const [q, setQ] = useState("");
+  const [stats, setStats] = useState<string | null>(null);
   if (error) return <ErrorBox error={error} onRetry={reload} />;
   if (!data) return <Loading />;
-  const list = data.shares.filter((s) => filter === "all" || s.status === "active");
+  const needle = q.trim().toLowerCase();
+  const list = data.shares.filter((s) => (filter === "all" || s.status === "active") && (!needle || (s.name + " " + s.ownerEmail).toLowerCase().includes(needle)));
+  const act = (p: Promise<unknown>, msg: string) => p.then(() => (toast.ok(msg), reload())).catch(toast.error);
   return (
     <>
-      <div className="chips-row">
-        <button className={"chip-btn" + (filter === "active" ? " on" : "")} onClick={() => setFilter("active")}>
-          Active
-        </button>
-        <button className={"chip-btn" + (filter === "all" ? " on" : "")} onClick={() => setFilter("all")}>
-          All
-        </button>
+      <div className="toolbar">
+        <div className="chips-row">
+          <button className={"chip-btn" + (filter === "active" ? " on" : "")} onClick={() => setFilter("active")}>
+            Active
+          </button>
+          <button className={"chip-btn" + (filter === "all" ? " on" : "")} onClick={() => setFilter("all")}>
+            All
+          </button>
+        </div>
+        <label className="search grow-sm">
+          <Icon name="search" size={18} />
+          <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search links or owners" aria-label="Search links" />
+        </label>
       </div>
       <div className="table-scroll">
         <table className="dtable">
@@ -311,7 +361,7 @@ function AdminLinks() {
             {list.map((s) => (
               <tr key={s.id}>
                 <td>
-                  <Icon name={s.kind === "upload" ? "inbox" : "link"} size={15} /> {s.name}
+                  <Icon name={s.kind === "upload" ? "inbox" : "link"} size={15} /> {s.name} {s.hasPassword && <Icon name="lock" size={13} label="Password protected" />}
                 </td>
                 <td className="small">{s.ownerEmail}</td>
                 <td>
@@ -320,24 +370,29 @@ function AdminLinks() {
                 <td className="small">{s.kind === "upload" ? `${s.uploadCount} uploads` : `${s.downloadCount}${s.maxDownloads ? "/" + s.maxDownloads : ""} downloads`}</td>
                 <td className="small muted">{s.expiresAt ? relativeTime(s.expiresAt) : "never"}</td>
                 <td className="right">
-                  {!s.revoked && (
-                    <button
-                      className="btn sm danger"
-                      onClick={() =>
-                        post(`/api/v1/admin/shares/${s.id}/revoke`)
-                          .then(() => (toast.ok("Link revoked"), reload()))
-                          .catch(toast.error)
-                      }
-                    >
-                      Revoke
-                    </button>
-                  )}
+                  <Menu
+                    items={[
+                      { label: "Analytics", icon: "chart", onClick: () => setStats(s.id) },
+                      { label: "Open link", icon: "globe", onClick: () => window.open(shareLink(s), "_blank", "noopener") },
+                      !s.revoked && { label: "Revoke", icon: "x", onClick: () => act(post(`/api/v1/admin/shares/${s.id}/revoke`), "Link revoked") },
+                      {
+                        label: "Delete",
+                        icon: "trash",
+                        danger: true,
+                        onClick: async () => {
+                          if (await dialogs.confirm(`Delete “${s.name}”?`, "The link stops working immediately and its analytics are removed. The owner's files are not deleted.", "Delete", true))
+                            act(del(`/api/v1/admin/shares/${s.id}`), "Link deleted");
+                        },
+                      },
+                    ]}
+                  />
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      <LinkAnalyticsDialog shareId={stats} onClose={() => setStats(null)} />
     </>
   );
 }
@@ -389,42 +444,109 @@ function AdminDevices() {
   );
 }
 
-function Audit() {
-  const { data, error, reload } = useAsync(
-    () => get<{ events: { id: string; at: number; email: string; action: string; target: string; ip: string; detail: string }[] }>("/api/v1/admin/audit?limit=300"),
-    [],
-  );
-  if (error) return <ErrorBox error={error} onRetry={reload} />;
-  if (!data) return <Loading />;
+interface AuditEvent {
+  id: string;
+  at: number;
+  userId: string;
+  email: string;
+  action: string;
+  target: string;
+  ip: string;
+  detail: string;
+}
+
+function Audit({ user, clearUser }: { user: { id: string; email: string } | null; clearUser: () => void }) {
+  const [q, setQ] = useState("");
+  const [applied, setApplied] = useState("");
+  const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [more, setMore] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [loading, setLoading] = useState(true);
+  const filters = (): Record<string, string> => ({ ...(applied ? { q: applied } : {}), ...(user ? { user: user.id } : {}) });
+  const load = async (before?: number) => {
+    setLoading(true);
+    try {
+      const qs = new URLSearchParams({ limit: "200", ...filters(), ...(before ? { before: String(before) } : {}) });
+      const r = await get<{ events: AuditEvent[]; more: boolean }>(`/api/v1/admin/audit?${qs}`);
+      setEvents((prev) => (before ? [...prev, ...r.events] : r.events));
+      setMore(r.more);
+      setError(null);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    load();
+  }, [applied, user]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className="table-scroll">
-      <table className="dtable">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Who</th>
-            <th>Action</th>
-            <th>Detail</th>
-            <th>IP</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.events.map((e) => (
-            <tr key={e.id}>
-              <td className="small muted" title={formatDate(e.at)}>
-                {relativeTime(e.at)}
-              </td>
-              <td className="small">{e.email || "—"}</td>
-              <td>
-                <code>{e.action}</code>
-              </td>
-              <td className="small">{e.detail || e.target}</td>
-              <td className="small muted">{e.ip}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <div className="toolbar">
+        <form className="search grow-sm" role="search" onSubmit={(e) => (e.preventDefault(), setApplied(q.trim()))}>
+          <Icon name="search" size={18} />
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => (setQ(e.target.value), e.target.value === "" && setApplied(""))}
+            placeholder="Search action, user, detail or IP"
+            aria-label="Search audit log"
+          />
+        </form>
+        {user && (
+          <span className="chip info">
+            {user.email}
+            <button className="icon-btn sm" aria-label="Show all users" onClick={clearUser}>
+              <Icon name="x" size={14} />
+            </button>
+          </span>
+        )}
+        <a className="btn sm" href={`/api/v1/admin/audit?format=csv&${new URLSearchParams(filters())}`} download>
+          <Icon name="download" size={16} /> Export CSV
+        </a>
+        <button className="btn sm" onClick={() => load()}>
+          <Icon name="retry" size={16} /> Refresh
+        </button>
+      </div>
+      {error != null && <ErrorBox error={error} onRetry={() => load()} />}
+      {loading && events.length === 0 && <Loading />}
+      {!loading && events.length === 0 && error == null && <EmptyState icon="search" title="No matching events" />}
+      {events.length > 0 && (
+        <div className="table-scroll">
+          <table className="dtable">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Who</th>
+                <th>Action</th>
+                <th>Detail</th>
+                <th>IP</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((e) => (
+                <tr key={e.id}>
+                  <td className="small muted nowrap" title={formatDate(e.at)}>
+                    {relativeTime(e.at)}
+                  </td>
+                  <td className="small">{e.email || "—"}</td>
+                  <td>
+                    <code>{e.action}</code>
+                  </td>
+                  <td className="small wrap">{[e.detail, e.target && e.target !== e.detail ? e.target : ""].filter(Boolean).join(" · ")}</td>
+                  <td className="small muted">{e.ip}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {more && (
+        <button className="btn self-start" disabled={loading} onClick={() => load(events[events.length - 1]?.at)}>
+          {loading ? "Loading…" : "Load older events"}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -470,6 +592,7 @@ function System() {
           >
             <Icon name="retry" size={16} /> Run cleanup now
           </button>
+
         </header>
         <dl className="kv">
           {Object.entries(data.config).map(([k, v]) => (
@@ -479,7 +602,7 @@ function System() {
             </div>
           ))}
         </dl>
-        <p className="muted small">Configuration is set with FERRY_* environment variables. Secrets are never shown.</p>
+        <p className="muted small">Current effective configuration (secrets are never shown). Change it under the Settings tab; server-level options like the port, database and TLS are set with FERRY_* environment variables.</p>
       </section>
       <section className="panel">
         <header className="panel-head">

@@ -1,13 +1,14 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { del, get, patch, post, type SessionInfo, type User } from "../lib/api";
-import { applyTheme, getTheme, pref, setPref, useAuth, type Theme } from "../lib/auth";
+import { THEMES, applyTheme, getTheme, pref, setPref, useAuth, type Theme } from "../lib/auth";
 import { EXPIRY_OPTIONS, describeAgent, formatDate, relativeTime } from "../lib/format";
-import { Icon, type IconName } from "../components/Icon";
+import { Icon } from "../components/Icon";
 import { CopyField, ErrorBox, QR, useAsync, useDialogs, useToast } from "../components/ui";
 
 export function Settings() {
-  const { user, info, setUser, logout } = useAuth();
+  const { user, info, setUser, logout, me, refreshMe } = useAuth();
+  const hasPassword = me?.hasPassword !== false;
   const toast = useToast();
   const navigate = useNavigate();
   const [name, setName] = useState(user?.name ?? "");
@@ -35,17 +36,12 @@ export function Settings() {
       setCur("");
       setPw("");
       setPw2("");
-      toast.ok("Password changed. Other devices were signed out.");
+      toast.ok(hasPassword ? "Password changed. Other devices were signed out." : "Password set. You can now also sign in with your email and password.");
+      refreshMe();
     } catch (err) {
       toast.error(err);
     }
   };
-
-  const themes: [Theme, string, IconName][] = [
-    ["system", "System", "monitor"],
-    ["light", "Light", "sun"],
-    ["dark", "Dark", "moon"],
-  ];
 
   return (
     <div className="page narrow-page">
@@ -69,11 +65,18 @@ export function Settings() {
 
       <section className="panel">
         <h2>Appearance</h2>
-        <div className="seg big" role="radiogroup" aria-label="Theme">
-          {themes.map(([t, l, i]) => (
-            <label key={t} className={theme === t ? "on" : ""}>
+        <div className="theme-grid" role="radiogroup" aria-label="Theme">
+          {THEMES.map(([t, l, mode, [bg, surface, accent]]) => (
+            <label key={t} className={"theme-opt" + (theme === t ? " on" : "")}>
               <input type="radio" name="theme" checked={theme === t} onChange={() => (setTheme(t), applyTheme(t))} />
-              <Icon name={i} size={18} /> {l}
+              <span className="theme-swatch" style={{ background: t === "system" ? `linear-gradient(135deg, ${bg} 50%, ${surface} 50%)` : bg }} aria-hidden="true">
+                <i style={{ background: t === "system" ? "#888" : surface }} />
+                <b style={{ background: accent }} />
+              </span>
+              <span className="theme-name">
+                {l}
+                <small>{mode === "auto" ? "Follows your device" : mode === "dark" ? "Dark" : "Light"}</small>
+              </span>
             </label>
           ))}
         </div>
@@ -109,12 +112,15 @@ export function Settings() {
       </section>
 
       <section className="panel">
-        <h2>Change password</h2>
+        <h2>{hasPassword ? "Change password" : "Set a password"}</h2>
         <form className="form" onSubmit={changePw}>
-          <label className="field">
-            <span>Current password</span>
-            <input type="password" value={cur} onChange={(e) => setCur(e.target.value)} autoComplete="current-password" required />
-          </label>
+          {!hasPassword && <p className="muted small">Your account signs in with {info?.oidc?.name ?? "single sign-on"}. A password also lets you sign in to the Ferry Android app.</p>}
+          {hasPassword && (
+            <label className="field">
+              <span>Current password</span>
+              <input type="password" value={cur} onChange={(e) => setCur(e.target.value)} autoComplete="current-password" required />
+            </label>
+          )}
           <label className="field">
             <span>New password</span>
             <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" required minLength={8} maxLength={72} />
@@ -123,10 +129,12 @@ export function Settings() {
             <span>Repeat new password</span>
             <input type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} autoComplete="new-password" required minLength={8} maxLength={72} />
           </label>
-          <button className="btn primary self-start">Change password</button>
+          <button className="btn primary self-start">{hasPassword ? "Change password" : "Set password"}</button>
         </form>
       </section>
 
+      {info?.oidc && <ConnectedAccounts provider={info.oidc.name} hasPassword={hasPassword} />}
+      <Notifications />
       <TwoFactor />
       <Sessions />
 
@@ -281,6 +289,131 @@ function Sessions() {
         <button className="btn self-start" onClick={revokeOthers}>
           <Icon name="logout" size={18} /> Sign out everywhere else
         </button>
+      )}
+    </section>
+  );
+}
+
+function Notifications() {
+  const { me, refreshMe, info } = useAuth();
+  const toast = useToast();
+  const [url, setUrl] = useState(me?.gotifyUrl ?? "");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const configured = !!me?.gotifyConfigured;
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await patch("/api/v1/me", token ? { gotifyUrl: url, gotifyToken: token } : { gotifyUrl: url });
+      setToken("");
+      await refreshMe();
+      toast.ok(url ? "Gotify settings saved" : "Gotify notifications turned off");
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const test = async () => {
+    setBusy(true);
+    try {
+      await post("/api/v1/me/gotify/test");
+      toast.ok("Test message sent — check Gotify");
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="panel">
+      <h2>Notifications</h2>
+      <p className="muted small">
+        Links with <strong>Notify me</strong> turned on alert you when files arrive or are downloaded
+        {info?.capabilities.includes("email") ? " — by email, and" : ""} by push through your own <a href="https://gotify.net" target="_blank" rel="noreferrer">Gotify</a> server.
+      </p>
+      <form className="form" onSubmit={save}>
+        <label className="field">
+          <span>Gotify server</span>
+          <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://gotify.example.com" inputMode="url" />
+        </label>
+        <label className="field">
+          <span>Application token {configured && <span className="chip ok">saved</span>}</span>
+          <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={configured ? "Leave empty to keep the saved token" : "Create an application in Gotify and paste its token"} autoComplete="off" required={!configured && !!url} />
+        </label>
+        <div className="row-actions">
+          <button className="btn primary" disabled={busy}>
+            Save
+          </button>
+          {configured && (
+            <button type="button" className="btn" onClick={test} disabled={busy}>
+              <Icon name="send" size={18} /> Send test
+            </button>
+          )}
+        </div>
+      </form>
+    </section>
+  );
+}
+
+interface Identity {
+  id: string;
+  email: string;
+  provider: string;
+  createdAt: number;
+  lastLogin: number;
+}
+
+function ConnectedAccounts({ provider, hasPassword }: { provider: string; hasPassword: boolean }) {
+  const { data, error, reload } = useAsync(() => get<{ identities: Identity[] }>("/api/v1/me/identities"), []);
+  const [params, setParams] = useSearchParams();
+  const toast = useToast();
+  const dialogs = useDialogs();
+  useEffect(() => {
+    if (params.get("sso") === "connected") {
+      toast.ok(`${provider} connected`);
+      setParams({}, { replace: true });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const remove = async (i: Identity) => {
+    if (!(await dialogs.confirm(`Disconnect ${provider}?`, `You won't be able to sign in with ${i.email || provider} anymore until you connect it again.`, "Disconnect", true))) return;
+    try {
+      await del(`/api/v1/me/identities/${i.id}`);
+      toast.ok(`${provider} disconnected`);
+      reload();
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+  const list = data?.identities ?? [];
+  return (
+    <section className="panel">
+      <h2>Connected accounts</h2>
+      <p className="muted small">Sign in with {provider} instead of your password.</p>
+      {error != null && <ErrorBox error={error} onRetry={reload} />}
+      <ul className="rows">
+        {list.map((i) => (
+          <li key={i.id} className="trow-item">
+            <Icon name="shield" size={20} />
+            <div className="grow">
+              <strong>{i.provider}</strong>
+              <div className="muted small row-meta">
+                <span>{i.email || "no email shared"}</span>
+                <span>connected {relativeTime(i.createdAt)}</span>
+                {i.lastLogin > 0 && <span>last used {relativeTime(i.lastLogin)}</span>}
+              </div>
+            </div>
+            <button className="btn sm" onClick={() => remove(i)} disabled={!hasPassword && list.length === 1} title={!hasPassword && list.length === 1 ? "Set a password first" : undefined}>
+              Disconnect
+            </button>
+          </li>
+        ))}
+      </ul>
+      {data && list.length === 0 && (
+        <a className="btn self-start" href="/api/v1/auth/oidc/start?mode=link">
+          <Icon name="link" size={18} /> Connect {provider}
+        </a>
       )}
     </section>
   );

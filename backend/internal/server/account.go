@@ -77,8 +77,8 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	label := url.PathEscape(s.cfg.SiteName + ":" + u.Email)
-	uri := "otpauth://totp/" + label + "?secret=" + secret + "&issuer=" + url.QueryEscape(s.cfg.SiteName) + "&algorithm=SHA1&digits=6&period=30"
+	label := url.PathEscape(s.conf().SiteName + ":" + u.Email)
+	uri := "otpauth://totp/" + label + "?secret=" + secret + "&issuer=" + url.QueryEscape(s.conf().SiteName) + "&algorithm=SHA1&digits=6&period=30"
 	writeJSON(w, 200, map[string]string{"secret": secret, "uri": uri})
 }
 
@@ -152,7 +152,7 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 
 // resetEnabled needs SMTP and a configured public URL: building the emailed link from the request's
 // Host header would let an attacker send victims a valid reset token pointing at their own site.
-func (s *Server) resetEnabled() bool { return s.cfg.SMTPHost != "" && s.cfg.PublicURL != "" }
+func (s *Server) resetEnabled() bool { return s.conf().SMTPHost != "" && s.conf().PublicURL != "" }
 
 const resetTTL = time.Hour
 
@@ -188,12 +188,12 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.audit(r.Context(), r, id, "password_reset_requested", email, "")
-		link := s.cfg.PublicURL + "/reset?token=" + tok
-		body := "Hi " + name + ",\n\nSomeone (hopefully you) asked to reset your " + s.cfg.SiteName + " password.\n\n" +
+		link := s.conf().PublicURL + "/reset?token=" + tok
+		body := "Hi " + name + ",\n\nSomeone (hopefully you) asked to reset your " + s.conf().SiteName + " password.\n\n" +
 			"Choose a new password here (the link works for 1 hour, once):\n" + link + "\n\n" +
 			"If you didn't ask for this, ignore this email — your password stays the same.\n"
 		go func() {
-			if err := s.mail(email, "Reset your "+s.cfg.SiteName+" password", body); err != nil {
+			if err := s.mail(email, "Reset your "+s.conf().SiteName+" password", body); err != nil {
 				s.log.Warn("password reset email failed", "err", err)
 			}
 		}()

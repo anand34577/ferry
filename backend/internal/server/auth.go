@@ -134,7 +134,7 @@ func SetPassword(ctx context.Context, q db.Q, userID, password, keepSession stri
 }
 
 func (s *Server) bootstrapAdmin(ctx context.Context) error {
-	if s.cfg.AdminEmail == "" {
+	if s.conf().AdminEmail == "" {
 		return nil
 	}
 	var n int
@@ -144,9 +144,9 @@ func (s *Server) bootstrapAdmin(ctx context.Context) error {
 	if n > 0 {
 		return nil
 	}
-	_, err := CreateUser(ctx, s.db, s.cfg.AdminEmail, "Admin", s.cfg.AdminPassword, "admin")
+	_, err := CreateUser(ctx, s.db, s.conf().AdminEmail, "Admin", s.conf().AdminPassword, "admin")
 	if err == nil {
-		s.log.Info("created initial admin from FERRY_ADMIN_EMAIL", "email", s.cfg.AdminEmail)
+		s.log.Info("created initial admin from FERRY_ADMIN_EMAIL", "email", s.conf().AdminEmail)
 	}
 	return err
 }
@@ -155,6 +155,14 @@ func (s *Server) audit(ctx context.Context, r *http.Request, userID, action, tar
 	ip := ""
 	if r != nil {
 		ip = s.clientIP(r)
+	}
+	if f, ok := ctx.Value(auditKey).(*auditFlag); ok {
+		f.done = true
+	}
+	if r != nil {
+		if c, err := r.Cookie(adminReturnCookie); err == nil && c.Value != "" {
+			detail = strings.TrimSpace(detail + " [by admin while signed in as this user]")
+		}
 	}
 	if _, err := s.db.Exec(ctx, `INSERT INTO audit_log (id, at, user_id, action, target, ip, detail) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		newID(), nowMs(), userID, action, target, ip, detail); err != nil {
@@ -207,10 +215,13 @@ func (s *Server) sessionToken(r *http.Request) (string, bool) {
 
 func (s *Server) authenticate(r *http.Request) (*authInfo, error) {
 	tok, cookie := s.sessionToken(r)
+	return s.authToken(r.Context(), tok, cookie)
+}
+
+func (s *Server) authToken(ctx context.Context, tok string, cookie bool) (*authInfo, error) {
 	if tok == "" {
 		return nil, errUnauthorized
 	}
-	ctx := r.Context()
 	sid := hashToken(tok)
 	var deviceID string
 	var expires, lastSeen int64
@@ -235,7 +246,7 @@ func (s *Server) authenticate(r *http.Request) (*authInfo, error) {
 	}
 	// Sliding expiry, written at most every 5 minutes to keep writes low.
 	if now-lastSeen > 5*60*1000 {
-		s.db.Exec(ctx, `UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id = ?`, now, now+s.cfg.SessionTTL.Milliseconds(), sid)
+		s.db.Exec(ctx, `UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id = ?`, now, now+s.conf().SessionTTL.Milliseconds(), sid)
 		if deviceID != "" {
 			s.db.Exec(ctx, `UPDATE devices SET last_seen = ? WHERE id = ?`, now, deviceID)
 		}
@@ -296,7 +307,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
-	if !s.cfg.AllowSignup {
+	if !s.conf().AllowSignup {
 		s.writeErr(w, r, errf(403, "signup_disabled", "Sign-up is disabled on this server. Ask the administrator for an account."))
 		return
 	}
@@ -416,12 +427,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *User, r
 		}
 		device = map[string]any{"id": deviceID, "name": name, "platform": platform}
 	}
-	ua := r.UserAgent()
-	if len(ua) > 250 {
-		ua = ua[:250]
-	}
-	if _, err := s.db.Exec(ctx, `INSERT INTO sessions (id, user_id, device_id, created_at, expires_at, last_seen, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		hashToken(tok), u.ID, deviceID, now, now+s.cfg.SessionTTL.Milliseconds(), now, s.clientIP(r), ua); err != nil {
+	if err := s.insertSession(ctx, r, tok, u.ID, deviceID, s.conf().SessionTTL, r.UserAgent()); err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
@@ -430,10 +436,31 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *User, r
 		resp["token"] = tok
 		resp["device"] = device
 	} else {
-		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true, Secure: s.secureCookie(r),
-			SameSite: http.SameSiteLaxMode, MaxAge: int(s.cfg.SessionTTL.Seconds())})
+		s.setSessionCookie(w, r, tok, s.conf().SessionTTL)
 	}
 	writeJSON(w, 200, resp)
+}
+
+func (s *Server) insertSession(ctx context.Context, r *http.Request, tok, userID, deviceID string, ttl time.Duration, ua string) error {
+	now := nowMs()
+	_, err := s.db.Exec(ctx, `INSERT INTO sessions (id, user_id, device_id, created_at, expires_at, last_seen, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		hashToken(tok), userID, deviceID, now, now+ttl.Milliseconds(), now, s.clientIP(r), clip(ua, 250))
+	return err
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, tok string, ttl time.Duration) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true, Secure: s.secureCookie(r),
+		SameSite: http.SameSiteLaxMode, MaxAge: int(ttl.Seconds())})
+}
+
+// webSession signs a browser in (used by SSO).
+func (s *Server) webSession(w http.ResponseWriter, r *http.Request, u *User) error {
+	tok := newToken(32)
+	if err := s.insertSession(r.Context(), r, tok, u.ID, "", s.conf().SessionTTL, r.UserAgent()); err != nil {
+		return err
+	}
+	s.setSessionCookie(w, r, tok, s.conf().SessionTTL)
+	return nil
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -446,28 +473,63 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	a := authOf(r)
-	writeJSON(w, 200, map[string]any{"user": a.user, "deviceId": a.deviceID})
+	var gURL, gTok string
+	s.db.QueryRow(r.Context(), `SELECT gotify_url, gotify_token FROM users WHERE id = ?`, a.user.ID).Scan(&gURL, &gTok)
+	var pwHash string
+	s.db.QueryRow(r.Context(), `SELECT password_hash FROM users WHERE id = ?`, a.user.ID).Scan(&pwHash)
+	resp := map[string]any{"user": a.user, "deviceId": a.deviceID, "gotifyUrl": gURL, "gotifyConfigured": gURL != "" && gTok != "", "hasPassword": pwHash != ""}
+	if c, err := r.Cookie(adminReturnCookie); err == nil {
+		if adm, err := s.authToken(r.Context(), c.Value, true); err == nil && adm.user.Role == "admin" {
+			resp["impersonator"] = adm.user.Email
+		}
+	}
+	writeJSON(w, 200, resp)
 }
 
 func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name string `json:"name"`
+		Name        *string `json:"name"`
+		GotifyURL   *string `json:"gotifyUrl"`
+		GotifyToken *string `json:"gotifyToken"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	name := strings.TrimSpace(req.Name)
-	if name == "" || len(name) > 100 {
-		s.writeErr(w, r, errf(400, "invalid_name", "Name must be between 1 and 100 characters."))
-		return
-	}
 	u := userOf(r)
-	if _, err := s.db.Exec(r.Context(), `UPDATE users SET name = ?, updated_at = ? WHERE id = ?`, name, nowMs(), u.ID); err != nil {
-		s.writeErr(w, r, err)
-		return
+	ctx := r.Context()
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" || len(name) > 100 {
+			s.writeErr(w, r, errf(400, "invalid_name", "Name must be between 1 and 100 characters."))
+			return
+		}
+		if _, err := s.db.Exec(ctx, `UPDATE users SET name = ?, updated_at = ? WHERE id = ?`, name, nowMs(), u.ID); err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+		u.Name = name
 	}
-	u.Name = name
+	if req.GotifyURL != nil {
+		gURL, err := cleanGotifyURL(*req.GotifyURL)
+		if err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+		q, args := `UPDATE users SET gotify_url = ? WHERE id = ?`, []any{gURL, u.ID}
+		if req.GotifyToken != nil || gURL == "" { // clearing the URL also forgets the token
+			tok := ""
+			if req.GotifyToken != nil && gURL != "" {
+				tok = strings.TrimSpace(*req.GotifyToken)
+			}
+			q, args = `UPDATE users SET gotify_url = ?, gotify_token = ? WHERE id = ?`, []any{gURL, tok, u.ID}
+		}
+		if _, err := s.db.Exec(ctx, q, args...); err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+		s.audit(ctx, r, u.ID, "gotify_updated", "", gURL)
+	}
 	writeJSON(w, 200, map[string]any{"user": u})
 }
 
@@ -490,7 +552,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	if !checkPassword(hash, req.Current) {
+	if hash != "" && !checkPassword(hash, req.Current) { // accounts created by SSO have no password yet
 		s.writeErr(w, r, errf(400, "wrong_password", "Your current password is incorrect."))
 		return
 	}

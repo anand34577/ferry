@@ -358,4 +358,34 @@ CREATE TABLE password_resets (
   expires_at BIGINT NOT NULL
 );
 CREATE INDEX password_resets_user ON password_resets(user_id)
+`, `
+CREATE TABLE share_events (
+  id TEXT PRIMARY KEY,
+  share_id TEXT NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
+  at BIGINT NOT NULL,
+  kind TEXT NOT NULL,
+  ip TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
+  referrer TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX share_events_share ON share_events(share_id, at);
+CREATE INDEX share_events_at ON share_events(at);
+CREATE INDEX audit_user ON audit_log(user_id, at);
+ALTER TABLE shares ADD COLUMN short_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE shares ADD COLUMN short_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN gotify_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN gotify_token TEXT NOT NULL DEFAULT ''
+`, `
+CREATE TABLE user_identities (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  issuer TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  email TEXT NOT NULL DEFAULT '',
+  created_at BIGINT NOT NULL,
+  last_login BIGINT NOT NULL DEFAULT 0,
+  UNIQUE (issuer, subject)
+);
+CREATE INDEX user_identities_user ON user_identities(user_id)
 `}

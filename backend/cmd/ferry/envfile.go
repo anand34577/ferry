@@ -46,11 +46,30 @@ const envExample = `# Ferry configuration. Every setting is optional; commented 
 # FERRY_RATE_LIMIT=600
 
 # ---- Email (upload notifications, emailing links, password reset) ----
+# Email, single sign-on, short links, limits and the site name can also be set in the web app
+# (Admin → Settings) without a restart. Variables set here win and show as locked there.
 # FERRY_SMTP_HOST=smtp.example.com
 # FERRY_SMTP_PORT=587
 # FERRY_SMTP_USER=
 # FERRY_SMTP_PASSWORD=
 # FERRY_SMTP_FROM=ferry@example.com
+# FERRY_SMTP_SECURITY=auto        # auto | starttls | tls | none (plain, e.g. a local SMTP relay/proxy)
+# FERRY_SMTP_SKIP_VERIFY=false    # accept self-signed certificates
+#
+# Optional URL shortener (Shortr): share links also get a short URL.
+# FERRY_SHORTENER_URL=https://s.example.com
+# FERRY_SHORTENER_TOKEN=sk_...    # API key with the links:write scope
+#
+# Single sign-on with OpenID Connect (Keycloak, Authentik, Google, …). See docs/sso.md.
+# FERRY_OIDC_ISSUER=https://keycloak.example.com/realms/myrealm
+# FERRY_OIDC_CLIENT_ID=ferry
+# FERRY_OIDC_CLIENT_SECRET=
+# FERRY_OIDC_NAME=Keycloak
+# FERRY_OIDC_AUTO_CREATE=false         # create accounts for people without one
+# FERRY_OIDC_LINK_BY_EMAIL=true        # connect to existing accounts with the same verified email
+# FERRY_OIDC_ALLOWED_DOMAINS=          # e.g. example.com
+# FERRY_OIDC_ADMIN_GROUP=              # e.g. ferry-admins
+# FERRY_OIDC_GROUPS_CLAIM=groups       # Keycloak realm roles: realm_access.roles
 
 # ---- Database (SQLite by default) ----
 # FERRY_DB_DRIVER=postgres

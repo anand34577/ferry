@@ -2,6 +2,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -47,35 +48,66 @@ type Config struct {
 
 	SMTPHost, SMTPUser, SMTPPass, SMTPFrom string
 	SMTPPort                               int
+	SMTPSecurity                           string // auto | starttls | tls | none
+	SMTPSkipVerify                         bool   // accept self-signed/mismatched certificates
+
+	OIDC OIDCConfig
+
+	// Optional Shortr (or compatible) URL shortener: POST {url}/api/v1/links with a Bearer API key.
+	ShortenerURL, ShortenerToken string
 
 	ScanCommand  string
 	MetricsToken string
 	LogLevel     string
 	LogFormat    string // json | text
 	LogFile      string // optional; logs are also appended here (rotated at 10 MB)
+
+	FromEnv map[string]bool // FERRY_* variables that were set; they win over values saved in the admin UI
 }
 
+// OIDCConfig configures single sign-on with an OpenID Connect provider (Keycloak, Authentik, Authelia,
+// Zitadel, Google, Microsoft Entra ID, …). Disabled when Issuer is empty.
+type OIDCConfig struct {
+	Issuer, ClientID, ClientSecret string
+	Name                           string   // button label
+	Scopes                         []string // always includes openid
+	AutoCreate                     bool     // create an account on first sign-in
+	LinkByEmail                    bool     // connect to an existing account with the same (verified) email
+	TrustUnverifiedEmail           bool     // also link/create when the provider doesn't mark the email verified
+	AllowedDomains                 []string // email domains allowed to sign in; empty = any
+	AdminGroup                     string   // members of this group/role become admins (synced at each sign-in)
+	GroupsClaim                    string   // claim holding groups/roles; dotted paths like realm_access.roles work
+	SkipVerify                     bool     // accept a self-signed TLS certificate from the provider
+}
+
+func (o OIDCConfig) Enabled() bool { return o.Issuer != "" }
+
 func Load() (*Config, error) {
+	envSet = map[string]bool{}
+	defer func() { envSet = nil }()
 	c := &Config{
-		Addr:          env("FERRY_ADDR", ":8080"),
-		PublicURL:     strings.TrimRight(env("FERRY_PUBLIC_URL", ""), "/"),
-		SiteName:      env("FERRY_SITE_NAME", "Ferry"),
-		DataDir:       env("FERRY_DATA_DIR", "./data"),
-		DBDriver:      strings.ToLower(env("FERRY_DB_DRIVER", "sqlite")),
-		TLSCert:       env("FERRY_TLS_CERT", ""),
-		TLSKey:        env("FERRY_TLS_KEY", ""),
-		CookieSecure:  strings.ToLower(env("FERRY_COOKIE_SECURE", "auto")),
-		AdminEmail:    env("FERRY_ADMIN_EMAIL", ""),
-		AdminPassword: env("FERRY_ADMIN_PASSWORD", ""),
-		SMTPHost:      env("FERRY_SMTP_HOST", ""),
-		SMTPUser:      env("FERRY_SMTP_USER", ""),
-		SMTPPass:      env("FERRY_SMTP_PASSWORD", ""),
-		SMTPFrom:      env("FERRY_SMTP_FROM", ""),
-		ScanCommand:   env("FERRY_SCAN_COMMAND", ""),
-		MetricsToken:  env("FERRY_METRICS_TOKEN", ""),
-		LogLevel:      strings.ToLower(env("FERRY_LOG_LEVEL", "info")),
-		LogFormat:     strings.ToLower(env("FERRY_LOG_FORMAT", "text")),
-		LogFile:       env("FERRY_LOG_FILE", ""),
+		Addr:           env("FERRY_ADDR", ":8080"),
+		PublicURL:      strings.TrimRight(env("FERRY_PUBLIC_URL", ""), "/"),
+		SiteName:       env("FERRY_SITE_NAME", "Ferry"),
+		DataDir:        env("FERRY_DATA_DIR", "./data"),
+		DBDriver:       strings.ToLower(env("FERRY_DB_DRIVER", "sqlite")),
+		TLSCert:        env("FERRY_TLS_CERT", ""),
+		TLSKey:         env("FERRY_TLS_KEY", ""),
+		CookieSecure:   strings.ToLower(env("FERRY_COOKIE_SECURE", "auto")),
+		AdminEmail:     env("FERRY_ADMIN_EMAIL", ""),
+		AdminPassword:  env("FERRY_ADMIN_PASSWORD", ""),
+		SMTPHost:       env("FERRY_SMTP_HOST", ""),
+		SMTPUser:       env("FERRY_SMTP_USER", ""),
+		SMTPPass:       env("FERRY_SMTP_PASSWORD", ""),
+		SMTPFrom:       env("FERRY_SMTP_FROM", ""),
+		SMTPSecurity:   strings.ToLower(env("FERRY_SMTP_SECURITY", "auto")),
+		ShortenerURL:   strings.TrimRight(env("FERRY_SHORTENER_URL", ""), "/"),
+		ShortenerToken: env("FERRY_SHORTENER_TOKEN", ""),
+		ScanCommand:    env("FERRY_SCAN_COMMAND", ""),
+		MetricsToken:   env("FERRY_METRICS_TOKEN", ""),
+		LogLevel:       strings.ToLower(env("FERRY_LOG_LEVEL", "info")),
+		LogFormat:      strings.ToLower(env("FERRY_LOG_FORMAT", "text")),
+		LogFile:        env("FERRY_LOG_FILE", ""),
 	}
 	var errs []string
 	fail := func(err error) {
@@ -101,6 +133,28 @@ func Load() (*Config, error) {
 	c.MaxShareFiles, err = intEnv("FERRY_MAX_SHARE_FILES", 0)
 	fail(err)
 	c.SMTPPort, err = intEnv("FERRY_SMTP_PORT", 587)
+	fail(err)
+	c.SMTPSkipVerify, err = boolEnv("FERRY_SMTP_SKIP_VERIFY", false)
+	fail(err)
+	c.OIDC = OIDCConfig{
+		Issuer:       env("FERRY_OIDC_ISSUER", ""), // exact: must equal the provider's issuer (Authentik's ends in /)
+		ClientID:     env("FERRY_OIDC_CLIENT_ID", ""),
+		ClientSecret: env("FERRY_OIDC_CLIENT_SECRET", ""),
+		Name:         env("FERRY_OIDC_NAME", "Single sign-on"),
+		Scopes:       ParseScopes(env("FERRY_OIDC_SCOPES", "openid profile email")),
+		AdminGroup:   strings.TrimPrefix(env("FERRY_OIDC_ADMIN_GROUP", ""), "/"),
+		GroupsClaim:  env("FERRY_OIDC_GROUPS_CLAIM", "groups"),
+	}
+	for _, d := range splitList(env("FERRY_OIDC_ALLOWED_DOMAINS", "")) {
+		c.OIDC.AllowedDomains = append(c.OIDC.AllowedDomains, strings.ToLower(strings.TrimPrefix(d, "@")))
+	}
+	c.OIDC.AutoCreate, err = boolEnv("FERRY_OIDC_AUTO_CREATE", false)
+	fail(err)
+	c.OIDC.LinkByEmail, err = boolEnv("FERRY_OIDC_LINK_BY_EMAIL", true)
+	fail(err)
+	c.OIDC.TrustUnverifiedEmail, err = boolEnv("FERRY_OIDC_TRUST_UNVERIFIED_EMAIL", false)
+	fail(err)
+	c.OIDC.SkipVerify, err = boolEnv("FERRY_OIDC_SKIP_VERIFY", false)
 	fail(err)
 	c.RateLimitPerMinute, err = intEnv("FERRY_RATE_LIMIT", 600)
 	fail(err)
@@ -153,17 +207,56 @@ func Load() (*Config, error) {
 	if c.AdminEmail != "" && len(c.AdminPassword) < 8 {
 		errs = append(errs, "FERRY_ADMIN_PASSWORD must be at least 8 characters when FERRY_ADMIN_EMAIL is set")
 	}
+	c.FromEnv = envSet
+	if err := c.Validate(); err != nil {
+		errs = append(errs, err.Error())
+	}
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("invalid configuration:\n  %s", strings.Join(errs, "\n  "))
 	}
 	return c, nil
 }
 
+// envSet records which settings came from the environment during Load; those are locked in the admin UI.
+var envSet map[string]bool
+
 func env(k, def string) string {
 	if v, ok := os.LookupEnv(k); ok && strings.TrimSpace(v) != "" {
+		if envSet != nil {
+			envSet[k] = true
+		}
 		return strings.TrimSpace(v)
 	}
 	return def
+}
+
+// Validate checks settings that depend on each other. It runs at startup and whenever an
+// administrator saves settings.
+func (c *Config) Validate() error {
+	var errs []string
+	switch c.SMTPSecurity {
+	case "auto", "starttls", "tls", "none":
+	default:
+		errs = append(errs, "email security must be auto, starttls, tls or none")
+	}
+	if c.OIDC.Enabled() {
+		if !strings.HasPrefix(c.OIDC.Issuer, "https://") && !strings.HasPrefix(c.OIDC.Issuer, "http://") {
+			errs = append(errs, "the SSO issuer must be a URL like https://keycloak.example.com/realms/myrealm")
+		}
+		if c.OIDC.ClientID == "" {
+			errs = append(errs, "SSO needs a client ID")
+		}
+	}
+	if (c.ShortenerURL == "") != (c.ShortenerToken == "") {
+		errs = append(errs, "the URL shortener needs both its address and an API key")
+	}
+	if c.PublicURL != "" && !strings.HasPrefix(c.PublicURL, "https://") && !strings.HasPrefix(c.PublicURL, "http://") {
+		errs = append(errs, "the public address must start with https:// or http://")
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 func splitList(s string) []string {
@@ -205,15 +298,9 @@ func durEnv(k string, def time.Duration) (time.Duration, error) {
 	if v == "" {
 		return def, nil
 	}
-	if strings.HasSuffix(v, "d") { // time.ParseDuration has no days
-		n, err := strconv.Atoi(strings.TrimSuffix(v, "d"))
-		if err == nil && n >= 0 {
-			return time.Duration(n) * 24 * time.Hour, nil
-		}
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d < 0 {
-		return def, fmt.Errorf("%s: expected a duration like 30m, 24h or 7d, got %q", k, v)
+	d, err := ParseDuration(v)
+	if err != nil {
+		return def, fmt.Errorf("%s: %v", k, err)
 	}
 	return d, nil
 }

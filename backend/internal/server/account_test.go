@@ -144,7 +144,7 @@ func TestZipTicketAndMissingBlob(t *testing.T) {
 	sh := admin.json("POST", "/api/v1/shares", map[string]any{"fileIds": []string{a, b}, "maxDownloads": 1}, 201)
 	var blob string
 	s.db.QueryRow(context.Background(), `SELECT blob FROM files WHERE id = ?`, b).Scan(&blob)
-	os.Remove(filepath.Join(s.cfg.StoragePath, "blobs", blob[:2], blob))
+	os.Remove(filepath.Join(s.conf().StoragePath, "blobs", blob[:2], blob))
 	if r, body := newClient(t, ts.URL).do("GET", "/s/"+sh["token"].(string)+"/zip", nil, nil); r.StatusCode != 404 || !strings.Contains(string(body), "missing") {
 		t.Fatal("zip with missing blob", r.StatusCode)
 	}

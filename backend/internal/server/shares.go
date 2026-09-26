@@ -42,7 +42,9 @@ type Share struct {
 	Items         []shareItem `json:"items,omitempty"`
 	ItemCount     int         `json:"itemCount"`
 	OwnerName     string      `json:"ownerName,omitempty"`
-	UserID        string      `json:"-"`
+	ShortURL      string      `json:"shortUrl"` // from the optional URL shortener; "" when disabled or it failed
+	shortID       string
+	UserID        string `json:"-"`
 	passwordHash  string
 }
 
@@ -55,7 +57,7 @@ type shareItem struct {
 
 const shareCols = `s.id, s.token, s.user_id, s.kind, s.name, s.message, s.password_hash, s.expires_at, s.max_downloads, s.download_count,
 	s.allow_download, s.allow_preview, s.require_auth, s.allow_list, s.allow_delete, s.max_file_bytes, s.max_files, s.allowed_types,
-	s.folder_id, s.upload_count, s.uploaded_bytes, s.notify, s.revoked, s.last_access, s.created_at, s.updated_at`
+	s.folder_id, s.upload_count, s.uploaded_bytes, s.notify, s.revoked, s.last_access, s.created_at, s.updated_at, s.short_url, s.short_id`
 
 func scanShare(row interface{ Scan(...any) error }) (*Share, error) {
 	var sh *Share
@@ -303,11 +305,11 @@ func (s *Server) applyShareReq(ctx context.Context, u *User, sh *Share, req *sha
 	if sh.MaxDownloads > 0 {
 		sh.AllowPreview = false // a preview would consume a limited use
 	}
-	if !s.cfg.PublicSharing {
+	if !s.conf().PublicSharing {
 		sh.RequireAuth = true
 	}
-	if s.cfg.MaxShareFiles > 0 && (sh.MaxFiles == 0 || sh.MaxFiles > s.cfg.MaxShareFiles) && sh.Kind == "upload" {
-		sh.MaxFiles = s.cfg.MaxShareFiles
+	if s.conf().MaxShareFiles > 0 && (sh.MaxFiles == 0 || sh.MaxFiles > s.conf().MaxShareFiles) && sh.Kind == "upload" {
+		sh.MaxFiles = s.conf().MaxShareFiles
 	}
 	if sh.Kind == "upload" {
 		if req.FolderID != nil && *req.FolderID != "" {
@@ -369,7 +371,7 @@ func (s *Server) validateShareItems(ctx context.Context, u *User, fileIDs, folde
 	if len(items) == 0 {
 		return nil, errf(400, "no_items", "Choose at least one file or folder to share.")
 	}
-	if s.cfg.MaxShareBytes > 0 || s.cfg.MaxShareFiles > 0 {
+	if s.conf().MaxShareBytes > 0 || s.conf().MaxShareFiles > 0 {
 		entries, err := s.collectEntries(ctx, u.ID, fileIDs, folderIDs)
 		if err != nil {
 			return nil, err
@@ -378,11 +380,11 @@ func (s *Server) validateShareItems(ctx context.Context, u *User, fileIDs, folde
 		for _, e := range entries {
 			total += e.File.Size
 		}
-		if s.cfg.MaxShareFiles > 0 && len(entries) > s.cfg.MaxShareFiles {
-			return nil, errf(413, "share_too_many", "A link can contain at most "+strconv.Itoa(s.cfg.MaxShareFiles)+" files.")
+		if s.conf().MaxShareFiles > 0 && len(entries) > s.conf().MaxShareFiles {
+			return nil, errf(413, "share_too_many", "A link can contain at most "+strconv.Itoa(s.conf().MaxShareFiles)+" files.")
 		}
-		if s.cfg.MaxShareBytes > 0 && total > s.cfg.MaxShareBytes {
-			return nil, errf(413, "share_too_large", "A link can contain at most "+humanSize(s.cfg.MaxShareBytes)+".")
+		if s.conf().MaxShareBytes > 0 && total > s.conf().MaxShareBytes {
+			return nil, errf(413, "share_too_large", "A link can contain at most "+humanSize(s.conf().MaxShareBytes)+".")
 		}
 	}
 	return items, nil
@@ -454,6 +456,7 @@ func (s *Server) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 	sh.HasPassword = sh.passwordHash != ""
 	sh.Status = sh.status()
 	sh.URL = s.shareURL(r, sh)
+	s.shorten(ctx, sh, sh.URL)
 	s.audit(ctx, r, u.ID, "share_created", sh.ID, sh.Kind+": "+sh.Name)
 	writeJSON(w, 201, sh)
 }
@@ -534,10 +537,13 @@ func (s *Server) handleRegenerateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sh.Token = newToken(12)
-	if _, err := s.db.Exec(ctx, `UPDATE shares SET token = ?, updated_at = ? WHERE id = ?`, sh.Token, nowMs(), sh.ID); err != nil {
+	if _, err := s.db.Exec(ctx, `UPDATE shares SET token = ?, short_url = '', short_id = '', updated_at = ? WHERE id = ?`, sh.Token, nowMs(), sh.ID); err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
+	s.unshorten(sh.shortID) // the old short link must stop working too
+	sh.ShortURL, sh.shortID = "", ""
+	s.shorten(ctx, sh, s.shareURL(r, sh))
 	s.db.Exec(ctx, `DELETE FROM download_sessions WHERE share_id = ?`, sh.ID)
 	s.streams.cancel(sh.ID)
 	s.audit(ctx, r, u.ID, "share_regenerated", sh.ID, sh.Name)
@@ -551,6 +557,8 @@ func (s *Server) deleteShare(ctx context.Context, sh *Share) error {
 	}
 	s.db.Exec(ctx, `DELETE FROM share_items WHERE share_id = ?`, sh.ID)
 	s.db.Exec(ctx, `DELETE FROM download_sessions WHERE share_id = ?`, sh.ID)
+	s.db.Exec(ctx, `DELETE FROM share_events WHERE share_id = ?`, sh.ID)
+	s.unshorten(sh.shortID)
 	// Unfinished anonymous uploads die with the link; received files stay in the owner's folder.
 	rows, err := s.db.Query(ctx, `SELECT id FROM uploads WHERE share_id = ? AND file_id = ''`, sh.ID)
 	if err == nil {
@@ -586,7 +594,7 @@ func (s *Server) handleDeleteShare(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEmailShare(w http.ResponseWriter, r *http.Request) {
 	u := userOf(r)
-	if s.cfg.SMTPHost == "" {
+	if s.conf().SMTPHost == "" {
 		s.writeErr(w, r, errf(400, "email_disabled", "Email is not configured on this server."))
 		return
 	}
@@ -613,9 +621,12 @@ func (s *Server) handleEmailShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	link := s.shareURL(r, sh)
-	body := u.Name + " shared \"" + sh.Name + "\" with you via " + s.cfg.SiteName + ".\n\n"
+	if sh.ShortURL != "" {
+		link = sh.ShortURL
+	}
+	body := u.Name + " shared \"" + sh.Name + "\" with you via " + s.conf().SiteName + ".\n\n"
 	if sh.Kind == "upload" {
-		body = u.Name + " asked you to upload files via " + s.cfg.SiteName + ".\n\n"
+		body = u.Name + " asked you to upload files via " + s.conf().SiteName + ".\n\n"
 	}
 	if m := strings.TrimSpace(req.Message); m != "" {
 		body += m + "\n\n"

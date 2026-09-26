@@ -29,12 +29,8 @@
   var types = (form.getAttribute("data-types") || "").split(",").filter(Boolean);
   var input = form.querySelector('input[type=file]');
   var queue = document.getElementById("queue");
-  var btn = document.getElementById("upload-btn");
   var drop = document.getElementById("drop");
   var CHUNK = 16 * 1024 * 1024;
-
-  ["dragenter", "dragover"].forEach(function (e) { drop.addEventListener(e, function () { drop.classList.add("over"); }); });
-  ["dragleave", "drop"].forEach(function (e) { drop.addEventListener(e, function () { drop.classList.remove("over"); }); });
 
   function b64(s) {
     var bytes = new TextEncoder().encode(s), bin = "";
@@ -136,21 +132,56 @@
     return true;
   }
 
-  form.addEventListener("submit", async function (e) {
-    e.preventDefault();
-    var files = Array.prototype.slice.call(input.files || []);
+  // Uploads start as soon as files are picked or dropped; more can be added while others run.
+  var pending = [], running = false, done = 0, failed = 0;
+  var title = drop.querySelector(".drop-title");
+  var idleTitle = title.textContent;
+  form.classList.add("js");
+
+  function enqueue(list) {
+    var files = Array.prototype.slice.call(list || []);
     if (!files.length) return;
-    btn.disabled = true;
-    input.disabled = true;
-    queue.innerHTML = "";
-    var uploader = (form.querySelector('input[name=uploader]') || {}).value || "";
-    var ok = 0;
-    for (var i = 0; i < files.length; i++) {
-      if (await uploadOne(files[i], row(files[i]), uploader.trim())) ok++;
+    files.forEach(function (f) { pending.push({ file: f, ui: row(f) }); });
+    run();
+  }
+
+  async function run() {
+    if (running) return;
+    running = true;
+    var uploader = ((form.querySelector("input[name=uploader]") || {}).value || "").trim();
+    while (pending.length) {
+      title.textContent = "Uploading… " + (pending.length > 1 ? pending.length + " files waiting" : "");
+      var job = pending.shift();
+      if (await uploadOne(job.file, job.ui, uploader)) done++; else failed++;
     }
-    btn.disabled = false;
-    input.disabled = false;
+    running = false;
+    title.textContent = idleTitle;
+    if (done > 0) {
+      title.textContent = done + " file" + (done === 1 ? "" : "s") + " uploaded" + (failed ? " · " + failed + " failed" : "");
+      setTimeout(function () { if (!running) location.reload(); }, failed ? 4000 : 1500);
+    }
+  }
+
+  input.addEventListener("change", function () {
+    enqueue(input.files);
     input.value = "";
-    if (ok > 0) setTimeout(function () { location.reload(); }, ok === files.length ? 1200 : 4000);
+  });
+  // Handle drops ourselves (anywhere on the page), so files never open in the browser instead.
+  ["dragenter", "dragover"].forEach(function (ev) {
+    document.addEventListener(ev, function (e) {
+      if (e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") >= 0) { e.preventDefault(); drop.classList.add("over"); }
+    });
+  });
+  document.addEventListener("dragleave", function (e) { if (!e.relatedTarget) drop.classList.remove("over"); });
+  document.addEventListener("drop", function (e) {
+    if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    drop.classList.remove("over");
+    enqueue(e.dataTransfer.files);
+  });
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    enqueue(input.files);
+    input.value = "";
   });
 })();

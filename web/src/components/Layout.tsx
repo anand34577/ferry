@@ -2,7 +2,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { useAuth } from "../lib/auth";
-import { get, type Usage } from "../lib/api";
+import { get, post, type Usage } from "../lib/api";
 import { formatBytes } from "../lib/format";
 import { TransferTray } from "./TransferTray";
 import { useUploads } from "../lib/uploads";
@@ -16,7 +16,7 @@ const NAV: [string, string, IconName][] = [
 ];
 
 export function Layout() {
-  const { user, info, logout } = useAuth();
+  const { user, info, logout, me } = useAuth();
   const navigate = useNavigate();
   const [usage, setUsage] = useState<Usage | null>(null);
   const items = useUploads();
@@ -32,6 +32,17 @@ export function Layout() {
   return (
     <div className="shell">
       <a className="skip" href="#main">Skip to content</a>
+      {me?.impersonator && (
+        <div className="imp-bar" role="status">
+          <Icon name="shield" size={18} />
+          <span>
+            Signed in as <strong>{user?.email}</strong> by {me.impersonator}
+          </span>
+          <button className="btn sm" onClick={() => post("/api/v1/auth/return").finally(() => window.location.assign("/admin"))}>
+            Return to admin
+          </button>
+        </div>
+      )}
       <aside className="sidebar">
         <div className="brand">
           <span className="logo" aria-hidden="true" />

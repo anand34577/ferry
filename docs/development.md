@@ -80,8 +80,13 @@ Clients should send `X-Ferry-Client: <platform>/<version> api=1`; an outdated cl
 | `GET/POST /setup` | first-run status / create first admin |
 | `POST /auth/login` | `{email,password,code?,device?}` → cookie (web) or `{token, device}` (apps). With 2FA on and no `code`: `401 totp_required`; wrong/reused code: `401 invalid_code` |
 | `POST /auth/signup`, `POST /auth/logout` | |
+| `GET /auth/oidc/start?next=&mode=login\|link`, `GET /auth/oidc/callback` | single sign-on redirect flow (browser navigation, not XHR). Errors come back as `/login?sso_error=…`; an unmatched identity as `/login?sso=connect` |
+| `GET/DELETE /auth/oidc/pending`, `POST /auth/oidc/link` | identity waiting to be connected (signed cookie); connect it to the signed-in account |
+| `GET /me/identities`, `DELETE /me/identities/{id}` | connected SSO accounts (can't remove the last sign-in method) |
+| `POST /auth/return` | end an admin's "sign in as" session and restore the admin session |
 | `POST /auth/forgot`, `POST /auth/reset` | `{email}` → emails a one-hour, single-use link (same answer whether or not the account exists); `{token,password}` → new password, all sessions signed out. Needs SMTP **and** `FERRY_PUBLIC_URL` (capability `password-reset`) |
-| `GET/PATCH /me`, `POST /me/password`, `GET /me/usage` | profile, password (signs out other sessions), quota usage |
+| `GET/PATCH /me`, `POST /me/password`, `GET /me/usage` | profile (`name`, `gotifyUrl`, `gotifyToken`; `GET` also returns `hasPassword`, `gotifyConfigured`, `impersonator`), password (signs out other sessions; `current` not needed when the account has none), quota usage |
+| `POST /me/gotify/test` | send a test push to the user's Gotify |
 | `POST /me/totp/setup\|enable\|disable` | two-factor sign-in: setup → `{secret, uri}` (otpauth QR); enable `{code}`; disable `{password}` |
 | `GET /me/sessions`, `DELETE /me/sessions/{id}`, `POST /me/sessions/revoke-others` | where the account is signed in; sign out one or all others |
 | `GET /files?folder=&q=&sort=name\|size\|date&order=` | folder listing or search |
@@ -93,12 +98,17 @@ Clients should send `X-Ferry-Client: <platform>/<version> api=1`; an outdated cl
 | `POST /uploads` … | tus 1.0 (creation, termination). Metadata: `filename`, `folderId`, `transferId`, `conflict` (`keep_both\|replace\|skip`), `sha256`. Final response headers: `Ferry-File-Id`, `Ferry-Sha256`, `Ferry-Skipped` |
 | `GET /uploads` | my incomplete uploads |
 | `GET/POST /shares`, `GET/PATCH/DELETE /shares/{id}` | links (`kind: download\|upload`, `expiresIn`, `password`, `maxDownloads`, flags…) |
-| `POST /shares/{id}/regenerate`, `POST /shares/{id}/email` | new token (old URL dies), email the link |
+| `POST /shares/{id}/regenerate`, `POST /shares/{id}/email` | new token (old URL and short URL die), email the link |
+| `GET /shares/{id}/analytics?days=30` | `{totals, visitors, events[]}` — owner or admin |
+| `POST /shares/{id}/shorten` | (re)create the short URL (capability `shortener`); shares carry `shortUrl` |
 | `GET /devices`, `PATCH/DELETE /devices/{id}` | my devices (with LAN presence when fresh) |
 | `PUT/DELETE /devices/current/presence` | publish/clear LAN addresses for server-assisted discovery |
 | `GET/POST /transfers`, `GET/PATCH/DELETE /transfers/{id}`, `POST /transfers/clear` | unified history (`?limit=&before=<createdAt>&direction=sent\|received&status=a,b` — filters are exact, page with `before`); `targetDeviceId` creates a device-inbox transfer |
 | `GET /transfers/{id}/files`, `GET /inbox` | files of a relayed transfer; transfers waiting for this device |
-| `GET /admin/stats\|users\|shares\|devices\|audit\|system`, `POST /admin/users`, `PATCH/DELETE /admin/users/{id}`, `POST /admin/shares/{id}/revoke`, `DELETE /admin/devices/{id}`, `POST /admin/cleanup` | administration |
+| `GET /admin/stats\|users\|shares\|devices\|audit\|system`, `POST /admin/users`, `PATCH/DELETE /admin/users/{id}`, `POST /admin/shares/{id}/revoke`, `DELETE /admin/shares/{id}`, `DELETE /admin/devices/{id}`, `POST /admin/cleanup` | administration |
+| `GET /admin/audit?q=&user=&action=&before=&since=&limit=&format=csv` | searchable audit log, paged with `before`; `more: true` when older events exist |
+| `GET/PATCH /admin/settings` | settings editable in the web UI (`{key: value}`, `null` resets to default); environment-set keys are `locked`, secrets are never returned |
+| `POST /admin/users/{id}/impersonate\|signout`, `DELETE /admin/users/{id}/identities`, `POST /admin/test-email` | sign in as a user (web, 1 h), sign a user out everywhere, disconnect SSO, SMTP test |
 
 Public routes: `GET /s/{token}`, `POST /s/{token}` (password), `GET /s/{token}/f/{fileId}[?inline=1]`, `GET /s/{token}/zip`,
 `GET/POST /u/{token}` (page / password or multipart upload), `/u/{token}/tus[/{id}]` (tus), `POST /u/{token}/delete/{fileId}`.

@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { del, get, patch, post, type Share } from "../lib/api";
+import { del, get, patch, post, shareLink, type Share } from "../lib/api";
+import { useAuth } from "../lib/auth";
+import { LinkAnalyticsDialog } from "../components/LinkAnalytics";
 import { formatBytes, formatDate, relativeTime } from "../lib/format";
 import { Icon } from "../components/Icon";
 import { CopyField, EmptyState, ErrorBox, Loading, Menu, Modal, QR, StatusChip, useAsync, useDialogs, useToast } from "../components/ui";
@@ -11,6 +13,9 @@ export function Links() {
   const { data, error, loading, reload } = useAsync(() => get<{ shares: Share[] }>("/api/v1/shares"), []);
   const [edit, setEdit] = useState<ShareTarget | null>(null);
   const [qr, setQr] = useState<Share | null>(null);
+  const [stats, setStats] = useState<string | null>(null);
+  const { info } = useAuth();
+  const shortener = info?.capabilities.includes("shortener");
   const toast = useToast();
   const dialogs = useDialogs();
   const navigate = useNavigate();
@@ -27,7 +32,7 @@ export function Links() {
   };
   const copy = async (s: Share) => {
     try {
-      await navigator.clipboard.writeText(s.url);
+      await navigator.clipboard.writeText(shareLink(s));
       toast.ok("Link copied");
     } catch {
       setQr(s);
@@ -108,6 +113,8 @@ export function Links() {
                   {s.expiresAt ? (s.status === "expired" ? "expired " : "expires ") + relativeTime(s.expiresAt) : "no expiry"}
                 </span>
                 <span>created {relativeTime(s.createdAt)}</span>
+                {s.lastAccess > 0 && <span>last opened {relativeTime(s.lastAccess)}</span>}
+                {s.shortUrl && <span className="mono">{s.shortUrl.replace(/^https?:\/\//, "")}</span>}
               </div>
             </div>
             <div className="link-actions">
@@ -117,9 +124,14 @@ export function Links() {
               <button className="icon-btn" aria-label="Show QR code" onClick={() => setQr(s)}>
                 <Icon name="qr" size={18} />
               </button>
+              <button className="icon-btn" aria-label="Analytics" title="Analytics" onClick={() => setStats(s.id)}>
+                <Icon name="chart" size={18} />
+              </button>
               <Menu
                 items={[
                   { label: "Edit", icon: "edit", onClick: () => setEdit({ edit: s }) },
+                  { label: "Analytics", icon: "chart", onClick: () => setStats(s.id) },
+                  shortener && !s.revoked && { label: s.shortUrl ? "New short link" : "Create short link", icon: "link", onClick: () => act(() => post(`/api/v1/shares/${s.id}/shorten`), "Short link ready") },
                   s.kind === "upload" && { label: "Open destination folder", icon: "folder", onClick: () => navigate(`/files?folder=${s.folderId}`) },
                   s.revoked
                     ? { label: "Enable", icon: "check", onClick: () => act(() => patch(`/api/v1/shares/${s.id}`, { revoked: false }), "Link enabled") }
@@ -147,12 +159,14 @@ export function Links() {
           </li>
         ))}
       </ul>
+      <LinkAnalyticsDialog shareId={stats} onClose={() => setStats(null)} />
       <ShareDialog target={edit} onClose={() => setEdit(null)} onSaved={reload} />
       <Modal open={!!qr} onClose={() => setQr(null)} title={qr?.name ?? ""}>
         {qr && (
           <div className="share-result">
-            <QR value={qr.url} size={220} />
-            <CopyField value={qr.url} />
+            <QR value={shareLink(qr)} size={220} />
+            <CopyField value={shareLink(qr)} />
+            {qr.shortUrl && <p className="muted small">Full link: <span className="mono">{qr.url}</span></p>}
           </div>
         )}
       </Modal>

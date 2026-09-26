@@ -21,6 +21,8 @@
 | Lost the phone with the authenticator app | Another administrator uses **Admin → Users → Turn off two-factor**, or on the Ferry machine: `ferry user disable-2fa -email you@example.com`. |
 | "Too many failed attempts" | Wait 15 minutes, or sign in from another network. |
 | No "Forgot your password?" link | Password reset needs email settings and `FERRY_PUBLIC_URL`. |
+| Single sign-on (Keycloak etc.) fails | The sign-in page shows the reason; see [Single sign-on → Troubleshooting](sso.md#troubleshooting). |
+| Email fails with "unencrypted connection" or a certificate error | For a local SMTP relay/proxy without TLS set `FERRY_SMTP_SECURITY=none`; for self-signed certificates `FERRY_SMTP_SKIP_VERIFY=true`. Change it in **Admin → Settings → Email** and test with **Send test email**, which shows the mail server's exact error. |
 
 ## Links and transfers
 

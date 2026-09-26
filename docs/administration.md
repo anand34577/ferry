@@ -93,3 +93,28 @@ Run these on the Ferry machine. With a service install, see [Admin commands](ins
 ## Scaling
 
 Run one Ferry per set of data. A single instance comfortably serves a team; for more users, use PostgreSQL and a larger machine. Running several copies behind a load balancer is not supported.
+
+## Server settings
+
+**Admin → Settings** changes the site name, public address, sign-up, limits, email, single sign-on, short links and retention while Ferry runs — no restart. Environment variables still win and show as locked. See [Configuration](configuration.md#two-places-for-settings).
+
+## Monitoring and admin powers
+
+- **Audit log** (Admin → Audit log): every change made through the API is recorded — sign-ins, file and folder changes, links, transfers, settings and all admin actions — with user, IP and time. Search it, filter by user (Users → ⋯ → Activity) and export it as CSV. Entries are kept for `FERRY_AUDIT_RETENTION`.
+- **Sign in as a user** (Users → ⋯): see and manage a user's files, links and settings as they would, for up to one hour. A banner offers “Return to admin”; everything done meanwhile is tagged in the audit log.
+- **Sign out everywhere**, disable, reset password, turn off two-factor, **disconnect SSO**, change quota or role, delete.
+- **Single sign-on:** users with a connected provider account show an **SSO** chip. Set-up and user matching rules: [Single sign-on](sso.md).
+- **Links** (Admin → Links): search every link on the server, open its analytics, revoke or delete it.
+- **Settings → Email → Send test email** checks your mail settings and shows the mail server's exact error.
+
+## Link analytics
+
+Each link records when it is opened, downloaded, previewed or uploaded to, and wrong password attempts, with visitor IP and browser. Owners see it under Links → chart icon; admins can open it for any link. Events follow `FERRY_AUDIT_RETENTION`.
+
+## Notifications (Gotify)
+
+Users can add their own [Gotify](https://gotify.net) server and application token in Settings → Notifications. Links with “Notify me” turned on then push a message when files arrive or are downloaded (and send an email when SMTP is configured), at most once every 10 minutes per link.
+
+## URL shortener
+
+In **Admin → Settings → Short links** (or with `FERRY_SHORTENER_URL` and `FERRY_SHORTENER_TOKEN`), enter your Shortr address and an API key (a [Shortr](https://github.com/anand34577/shortr) API key with `links:write`) and every new link also gets a short URL, shown and copied by default. Regenerating or deleting a link removes its short URL too; links made earlier get one from Links → ⋯ → Create short link. If the shortener is unreachable, links still work with their full address.

@@ -23,7 +23,8 @@ Everything you need to install, use and run Ferry.
 | | |
 |---|---|
 | [Configuration](configuration.md) | Every setting, with defaults |
-| [Administration](administration.md) | Users, quotas, backups, upgrades, monitoring, command line |
+| [Administration](administration.md) | Users, quotas, audit log, analytics, backups, upgrades, monitoring, command line |
+| [Single sign-on (OIDC)](sso.md) | Keycloak, Authentik, Authelia, Google, Entra ID and other OpenID Connect providers |
 | [Troubleshooting](troubleshooting.md) | Common problems and answers |
 
 ## Contributing

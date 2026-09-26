@@ -58,8 +58,8 @@ func (s *Server) tusOptions(w http.ResponseWriter, r *http.Request) {
 	tusHeaders(w)
 	w.Header().Set("Tus-Version", tusVersion)
 	w.Header().Set("Tus-Extension", "creation,termination")
-	if s.cfg.MaxUploadBytes > 0 {
-		w.Header().Set("Tus-Max-Size", strconv.FormatInt(s.cfg.MaxUploadBytes, 10))
+	if s.conf().MaxUploadBytes > 0 {
+		w.Header().Set("Tus-Max-Size", strconv.FormatInt(s.conf().MaxUploadBytes, 10))
 	}
 	w.WriteHeader(204)
 }
@@ -465,7 +465,7 @@ func (s *Server) finalizeUpload(ctx context.Context, up *upload, owner *User, sh
 			}
 		}
 	}
-	if s.cfg.ScanCommand != "" {
+	if s.conf().ScanCommand != "" {
 		if err := s.scan(ctx, key); err != nil {
 			discard()
 			s.log.Warn("upload rejected by scanner", "upload", up.ID, "err", err)
@@ -539,8 +539,16 @@ func (s *Server) finalizeUpload(ctx context.Context, up *upload, owner *User, sh
 		s.streams.cancel(f.ID)
 		s.store.Remove("blobs/" + oldBlob)
 	}
+	if share == nil {
+		s.audit(ctx, nil, owner.ID, "file_uploaded", f.ID, f.Name+" ("+humanSize(f.Size)+")")
+	}
 	if share != nil {
 		s.audit(ctx, nil, owner.ID, "upload_link_received", share.ID, f.Name)
+		detail := f.Name
+		if up.Uploader != "" {
+			detail += " — from " + up.Uploader
+		}
+		s.linkEvent(ctx, nil, share, "upload", detail)
 		if share.Notify {
 			go s.notifyUpload(owner, share, f, up.Uploader)
 		}
@@ -554,7 +562,7 @@ func (s *Server) scan(ctx context.Context, key string) error {
 	if !ok {
 		return nil
 	}
-	args := strings.Fields(s.cfg.ScanCommand)
+	args := strings.Fields(s.conf().ScanCommand)
 	for i := range args {
 		args[i] = strings.ReplaceAll(args[i], "{path}", p)
 	}

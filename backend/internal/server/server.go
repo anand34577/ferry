@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
@@ -37,7 +38,9 @@ var webuiFS embed.FS
 var templatesFS embed.FS
 
 type Server struct {
-	cfg     *config.Config
+	cfgp    atomic.Pointer[config.Config] // current settings; replaced when an admin saves settings
+	base    *config.Config                // settings from the environment, before admin overrides
+	cfgMu   sync.Mutex                    // serializes settings changes
 	db      *db.DB
 	store   storage.Backend
 	log     *slog.Logger
@@ -53,6 +56,7 @@ type Server struct {
 	scanMu  sync.Mutex
 	zips    sync.Map                             // ticket → *zipTicket
 	mail    func(to, subject, body string) error // sendMail; replaced in tests
+	oidc    oidcClient
 }
 
 type metrics struct {
@@ -60,13 +64,17 @@ type metrics struct {
 }
 
 func New(ctx context.Context, cfg *config.Config, d *db.DB, st storage.Backend, log *slog.Logger, logs *LogRing, version string) (*Server, error) {
-	s := &Server{cfg: cfg, db: d, store: st, log: log, logs: logs, version: version, started: time.Now(),
+	s := &Server{base: cfg, db: d, store: st, log: log, logs: logs, version: version, started: time.Now(),
 		limiter: newLimiter(), streams: newStreams()}
 	secret, err := s.loadSecret(ctx)
 	if err != nil {
 		return nil, err
 	}
 	s.secret = secret
+	s.cfgp.Store(cfg)
+	if err := s.loadSettings(ctx); err != nil {
+		log.Error("saved settings are invalid; using the environment only until they are fixed in Admin → Settings", "err", err)
+	}
 	s.mail = s.sendMail
 	s.tmpl, err = template.New("").Funcs(template.FuncMap{
 		"size": humanSize,
@@ -83,6 +91,9 @@ func New(ctx context.Context, cfg *config.Config, d *db.DB, st storage.Backend, 
 	s.routes()
 	return s, nil
 }
+
+// conf returns the current settings. Read it once per use; it may be replaced at any time.
+func (s *Server) conf() *config.Config { return s.cfgp.Load() }
 
 // loadSecret returns the HMAC key used for share cookies, creating it on first start.
 func (s *Server) loadSecret(ctx context.Context) ([]byte, error) {
@@ -109,8 +120,10 @@ func (s *Server) routes() {
 	m := http.NewServeMux()
 	s.mux = m
 	h := func(pattern string, fn http.HandlerFunc) { m.HandleFunc(pattern, fn) }
-	a := func(pattern string, fn http.HandlerFunc) { m.HandleFunc(pattern, s.requireUser(fn)) }
-	adm := func(pattern string, fn http.HandlerFunc) { m.HandleFunc(pattern, s.requireUser(s.requireAdmin(fn))) }
+	a := func(pattern string, fn http.HandlerFunc) { m.HandleFunc(pattern, s.requireUser(s.auditAPI(fn))) }
+	adm := func(pattern string, fn http.HandlerFunc) {
+		m.HandleFunc(pattern, s.requireUser(s.requireAdmin(s.auditAPI(fn))))
+	}
 
 	h("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	h("GET /readyz", s.handleReady)
@@ -124,6 +137,14 @@ func (s *Server) routes() {
 	h("POST /api/v1/auth/logout", s.handleLogout)
 	h("POST /api/v1/auth/forgot", s.handleForgotPassword)
 	h("POST /api/v1/auth/reset", s.handleResetPassword)
+	h("POST /api/v1/auth/return", s.handleStopImpersonate)
+	h("GET /api/v1/auth/oidc/start", s.handleOIDCStart)
+	h("GET /api/v1/auth/oidc/callback", s.handleOIDCCallback)
+	h("GET /api/v1/auth/oidc/pending", s.handleOIDCPending)
+	h("DELETE /api/v1/auth/oidc/pending", s.handleOIDCClearPending)
+	a("POST /api/v1/auth/oidc/link", s.handleOIDCLinkPending)
+	a("GET /api/v1/me/identities", s.handleListIdentities)
+	a("DELETE /api/v1/me/identities/{id}", s.handleDeleteIdentity)
 
 	a("GET /api/v1/me", s.handleMe)
 	a("PATCH /api/v1/me", s.handleUpdateMe)
@@ -135,6 +156,7 @@ func (s *Server) routes() {
 	a("POST /api/v1/me/totp/setup", s.handleTOTPSetup)
 	a("POST /api/v1/me/totp/enable", s.handleTOTPEnable)
 	a("POST /api/v1/me/totp/disable", s.handleTOTPDisable)
+	a("POST /api/v1/me/gotify/test", s.handleGotifyTest)
 
 	a("GET /api/v1/files", s.handleListFiles)
 	a("POST /api/v1/files/check", s.handleCheckNames)
@@ -164,6 +186,8 @@ func (s *Server) routes() {
 	a("DELETE /api/v1/shares/{id}", s.handleDeleteShare)
 	a("POST /api/v1/shares/{id}/regenerate", s.handleRegenerateShare)
 	a("POST /api/v1/shares/{id}/email", s.handleEmailShare)
+	a("POST /api/v1/shares/{id}/shorten", s.handleShortenShare)
+	a("GET /api/v1/shares/{id}/analytics", s.handleShareAnalytics)
 
 	a("GET /api/v1/devices", s.handleListDevices)
 	a("PUT /api/v1/devices/current/presence", s.handlePresence)
@@ -185,8 +209,15 @@ func (s *Server) routes() {
 	adm("POST /api/v1/admin/users", s.handleAdminCreateUser)
 	adm("PATCH /api/v1/admin/users/{id}", s.handleAdminUpdateUser)
 	adm("DELETE /api/v1/admin/users/{id}", s.handleAdminDeleteUser)
+	adm("POST /api/v1/admin/users/{id}/impersonate", s.handleAdminImpersonate)
+	adm("POST /api/v1/admin/users/{id}/signout", s.handleAdminSignOutUser)
+	adm("DELETE /api/v1/admin/users/{id}/identities", s.handleAdminDeleteIdentities)
 	adm("GET /api/v1/admin/shares", s.handleAdminShares)
 	adm("POST /api/v1/admin/shares/{id}/revoke", s.handleAdminRevokeShare)
+	adm("DELETE /api/v1/admin/shares/{id}", s.handleAdminDeleteShare)
+	adm("POST /api/v1/admin/test-email", s.handleAdminTestEmail)
+	adm("GET /api/v1/admin/settings", s.handleAdminSettings)
+	adm("PATCH /api/v1/admin/settings", s.handleAdminSaveSettings)
 	adm("GET /api/v1/admin/devices", s.handleAdminDevices)
 	adm("DELETE /api/v1/admin/devices/{id}", s.handleAdminDeleteDevice)
 	adm("GET /api/v1/admin/audit", s.handleAdminAudit)
@@ -212,8 +243,16 @@ func (s *Server) routes() {
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
-	caps := []string{"tus", "range", "shares", "upload-links", "one-time", "device-inbox", "presence", "zip", "transfers", "totp", "sessions"}
-	if s.cfg.SMTPHost != "" {
+	caps := []string{"tus", "range", "shares", "upload-links", "one-time", "device-inbox", "presence", "zip", "transfers", "totp", "sessions", "link-analytics", "gotify"}
+	if s.shortenerOn() {
+		caps = append(caps, "shortener")
+	}
+	var sso any
+	if s.conf().OIDC.Enabled() {
+		caps = append(caps, "oidc")
+		sso = map[string]any{"name": s.conf().OIDC.Name, "autoCreate": s.conf().OIDC.AutoCreate}
+	}
+	if s.conf().SMTPHost != "" {
 		caps = append(caps, "email")
 	}
 	if s.resetEnabled() {
@@ -221,15 +260,16 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"name":                "Ferry",
-		"siteName":            s.cfg.SiteName,
+		"siteName":            s.conf().SiteName,
 		"version":             s.version,
 		"apiVersion":          APIVersion,
 		"minClientApiVersion": MinClientAPIVersion,
 		"capabilities":        caps,
 		"serverTime":          nowMs(),
-		"allowSignup":         s.cfg.AllowSignup,
-		"publicSharing":       s.cfg.PublicSharing,
-		"maxUploadBytes":      s.cfg.MaxUploadBytes,
+		"allowSignup":         s.conf().AllowSignup,
+		"publicSharing":       s.conf().PublicSharing,
+		"maxUploadBytes":      s.conf().MaxUploadBytes,
+		"oidc":                sso,
 	})
 }
 
@@ -250,7 +290,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.MetricsToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.cfg.MetricsToken)) != 1 {
+	if s.conf().MetricsToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.conf().MetricsToken)) != 1 {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -259,6 +299,16 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "ferry_http_requests_total %d\nferry_http_5xx_total %d\nferry_bytes_received_total %d\nferry_bytes_sent_total %d\nferry_uploads_active %d\nferry_downloads_active %d\nferry_uptime_seconds %d\n",
 		m.requests.Load(), m.errors5xx.Load(), m.bytesIn.Load(), m.bytesOut.Load(), m.uploadsActive.Load(), m.downloadsActive.Load(), int(time.Since(s.started).Seconds()))
 }
+
+// assetVer changes whenever the public page assets do, so browsers never keep a stale cached copy.
+var assetVer = func() string {
+	h := sha256.New()
+	for _, n := range []string{"public.js", "public.css"} {
+		b, _ := templatesFS.ReadFile("templates/" + n)
+		h.Write(b)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:10]
+}()
 
 func (s *Server) handlePublicAsset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("file")
@@ -402,7 +452,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		}
 		// Global per-IP limit; generous so large folder uploads (many requests) are not throttled.
 		// FERRY_RATE_LIMIT=0 disables it (otherwise a limit of 0 would reject every request).
-		if s.cfg.RateLimitPerMinute > 0 && !s.limiter.allow("ip:"+s.clientIP(r), s.cfg.RateLimitPerMinute*5, time.Minute) {
+		if s.conf().RateLimitPerMinute > 0 && !s.limiter.allow("ip:"+s.clientIP(r), s.conf().RateLimitPerMinute*5, time.Minute) {
 			h.Set("Retry-After", "60")
 			s.writeErr(w, r, errf(429, "rate_limited", "Too many requests. Please wait a minute and try again."))
 			return
@@ -412,12 +462,12 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {
-	if len(s.cfg.CORSOrigins) == 0 {
+	if len(s.conf().CORSOrigins) == 0 {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		for _, o := range s.cfg.CORSOrigins {
+		for _, o := range s.conf().CORSOrigins {
 			if o == "*" || strings.EqualFold(o, origin) {
 				h := w.Header()
 				h.Set("Access-Control-Allow-Origin", origin)

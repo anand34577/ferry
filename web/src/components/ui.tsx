@@ -168,46 +168,73 @@ export function Switch({ checked, onChange, label, hint, disabled }: { checked: 
   );
 }
 
-export function Menu({ items, label = "More actions" }: { items: ({ label: string; icon: IconName; onClick: () => void; danger?: boolean } | false | null | undefined)[]; label?: string }) {
-  const [open, setOpen] = useState(false);
+type MenuItem = { label: string; icon: IconName; onClick: () => void; danger?: boolean };
+
+// The popup is position:fixed next to its button, so tables and panels with overflow never clip it;
+// it opens upwards when there isn't room below.
+export function Menu({ items, label = "More actions" }: { items: (MenuItem | false | null | undefined)[]; label?: string }) {
+  const [pos, setPos] = useState<React.CSSProperties | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const list = items.filter(Boolean) as MenuItem[];
+  const open = pos !== null;
   useEffect(() => {
     if (!open) return;
-    const close = (e: MouseEvent | KeyboardEvent) => {
-      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setPos(null);
     };
+    const dismiss = () => setPos(null);
     document.addEventListener("mousedown", close);
+    document.addEventListener("touchstart", close);
     document.addEventListener("keydown", close);
+    window.addEventListener("resize", dismiss);
+    window.addEventListener("scroll", dismiss, true);
+    pop.current?.querySelector("button")?.focus();
     return () => {
       document.removeEventListener("mousedown", close);
+      document.removeEventListener("touchstart", close);
       document.removeEventListener("keydown", close);
+      window.removeEventListener("resize", dismiss);
+      window.removeEventListener("scroll", dismiss, true);
     };
   }, [open]);
+  const toggle = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (open) return setPos(null);
+    const r = e.currentTarget.getBoundingClientRect();
+    const height = list.length * 42 + 14;
+    const right = Math.max(8, window.innerWidth - r.right);
+    setPos(r.bottom + height + 8 > window.innerHeight && r.top > height ? { right, bottom: window.innerHeight - r.top + 4 } : { right, top: r.bottom + 4 });
+  };
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    const btns = Array.from(pop.current?.querySelectorAll("button") ?? []);
+    const i = btns.indexOf(document.activeElement as HTMLButtonElement);
+    btns[(i + (e.key === "ArrowDown" ? 1 : btns.length - 1)) % btns.length]?.focus();
+  };
   return (
     <div className="menu" ref={ref}>
-      <button className="icon-btn" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={(e) => (e.stopPropagation(), setOpen(!open))}>
+      <button className="icon-btn" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
         <Icon name="more" />
       </button>
       {open && (
-        <div className="menu-pop" role="menu">
-          {items.filter(Boolean).map((it) => {
-            const i = it as { label: string; icon: IconName; onClick: () => void; danger?: boolean };
-            return (
-              <button
-                key={i.label}
-                role="menuitem"
-                className={i.danger ? "danger" : ""}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpen(false);
-                  i.onClick();
-                }}
-              >
-                <Icon name={i.icon} size={18} />
-                {i.label}
-              </button>
-            );
-          })}
+        <div className="menu-pop" role="menu" ref={pop} style={pos} onKeyDown={onKey}>
+          {list.map((i) => (
+            <button
+              key={i.label}
+              role="menuitem"
+              className={i.danger ? "danger" : ""}
+              onClick={(e) => {
+                e.stopPropagation();
+                setPos(null);
+                i.onClick();
+              }}
+            >
+              <Icon name={i.icon} size={18} />
+              {i.label}
+            </button>
+          ))}
         </div>
       )}
     </div>

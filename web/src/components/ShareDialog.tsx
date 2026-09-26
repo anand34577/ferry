@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { patch, post, type Share } from "../lib/api";
+import { patch, post, shareLink, type Share } from "../lib/api";
 import { EXPIRY_OPTIONS, formatDate, relativeTime, serverNow } from "../lib/format";
 import { useAuth, pref, setPref } from "../lib/auth";
 import { CopyField, Modal, QR, Switch, useToast } from "./ui";
@@ -135,6 +135,7 @@ export function ShareDialog({ target, onClose, onSaved }: { target: ShareTarget 
   };
 
   const emailOn = info?.capabilities.includes("email");
+  const notifyHint = (emailOn ? "By email and Gotify" : "Through Gotify") + " (set up in Settings) · at most every 10 minutes";
   const title = result ? "Link ready" : edit ? "Edit link" : kind === "upload" ? "Create upload link" : "Create share link";
 
   return (
@@ -161,14 +162,15 @@ export function ShareDialog({ target, onClose, onSaved }: { target: ShareTarget 
     >
       {result ? (
         <div className="share-result">
-          <QR value={result.url} size={180} />
+          <QR value={shareLink(result)} size={180} />
           <p className="muted center">
             {result.kind === "upload" ? "Anyone with this link can upload files to you" : "Anyone with this link can download"}
             {result.hasPassword ? " (password required)" : ""}
             {result.expiresAt ? ` · expires ${relativeTime(result.expiresAt)}` : ""}
             {result.maxDownloads === 1 ? " · one-time download" : ""}
           </p>
-          <CopyField value={result.url} />
+          <CopyField value={shareLink(result)} />
+          {result.shortUrl && <p className="muted small center">Full link: <span className="mono">{result.url}</span></p>}
           {emailOn && (
             <form
               className="inline-form"
@@ -245,6 +247,7 @@ export function ShareDialog({ target, onClose, onSaved }: { target: ShareTarget 
               </fieldset>
               <Switch checked={allowDownload} onChange={setAllowDownload} label="Allow downloads" hint="Turn off for preview-only links." />
               <Switch checked={allowPreview && limitMode === "none"} disabled={limitMode !== "none"} onChange={setAllowPreview} label="Allow preview in browser" />
+              <Switch checked={notify} onChange={setNotify} label="Notify me when someone downloads" hint={notifyHint} />
             </>
           ) : (
             <>
@@ -264,7 +267,7 @@ export function ShareDialog({ target, onClose, onSaved }: { target: ShareTarget 
               </label>
               <Switch checked={allowList} onChange={setAllowList} label="Show received files to uploaders" hint="Uploaders can see names of all files sent through this link." />
               <Switch checked={allowDelete} onChange={setAllowDelete} label="Let uploaders delete their own files" />
-              {emailOn && <Switch checked={notify} onChange={setNotify} label="Email me when files arrive" />}
+              <Switch checked={notify} onChange={setNotify} label="Notify me when files arrive" hint={notifyHint} />
             </>
           )}
           <Switch checked={requireAuth} onChange={setRequireAuth} disabled={info?.publicSharing === false} label="Require sign-in" hint="Only people with an account on this server can open the link." />

@@ -25,6 +25,7 @@ export interface ServerInfo {
   allowSignup: boolean;
   publicSharing: boolean;
   maxUploadBytes: number;
+  oidc: { name: string; autoCreate: boolean } | null;
 }
 
 export interface FileItem {
@@ -86,6 +87,36 @@ export interface Share {
   items?: { type: "file" | "folder"; id: string; name: string; size?: number }[];
   itemCount: number;
   ownerEmail?: string;
+  shortUrl: string;
+}
+
+/** The link to hand out: the short URL when the server's URL shortener made one. */
+export const shareLink = (s: Share) => s.shortUrl || s.url;
+
+export interface LinkEvent {
+  at: number;
+  kind: "view" | "download" | "preview" | "upload" | "password_failed";
+  ip: string;
+  userAgent: string;
+  referrer: string;
+  detail: string;
+}
+
+export interface LinkAnalytics {
+  share: { id: string; name: string; kind: "download" | "upload"; createdAt: number };
+  totals: Record<LinkEvent["kind"], number>;
+  visitors: number;
+  days: number;
+  events: LinkEvent[];
+}
+
+export interface Me {
+  user: User;
+  deviceId: string;
+  gotifyUrl: string;
+  gotifyConfigured: boolean;
+  hasPassword: boolean;
+  impersonator?: string;
 }
 
 export interface Device {

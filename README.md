@@ -9,7 +9,8 @@ Ferry is self-hosted file sharing and transfer. Your files stay on hardware you 
 - **Nearby transfers** between phones on the same Wi-Fi or hotspot — no internet needed, compatible with [LocalSend](https://localsend.org)
 - **Your devices, anywhere:** send from the web or your phone to your other devices through your server
 - **Resumable and verified:** transfers continue after a dropped connection, and every file is checked with SHA-256
-- **Secure by default:** two-factor sign-in, session management, rate limits, audit log
+- **Secure by default:** two-factor sign-in, single sign-on (OIDC: Keycloak, Authentik, Google, …), session management, rate limits, full audit log
+- **Link analytics, notifications and themes:** see who opened and downloaded your links, get Gotify or email alerts, optional short links via Shortr, 12 colour themes
 
 Ferry runs as a single program with the web app built in, on Windows, macOS and Linux (including Raspberry Pi), or in Docker. An Android app is included.
 
@@ -43,7 +44,8 @@ Then open **http://localhost:8080** and create the administrator account.
 |---|---|---|
 | [Getting started](docs/getting-started.md) | [User guide](docs/user-guide.md) | [Configuration](docs/configuration.md) |
 | [Install with Docker](docs/install-docker.md) | [Android app](docs/android.md) | [Administration](docs/administration.md) |
-| [Install the program](docs/install-binary.md) | | [Troubleshooting](docs/troubleshooting.md) |
+| [Install the program](docs/install-binary.md) | | [Single sign-on](docs/sso.md) |
+| | | [Troubleshooting](docs/troubleshooting.md) |
 | [HTTPS](docs/https.md) | | |
 
 Developers: [Development guide](docs/development.md) · [Contributing](CONTRIBUTING.md)

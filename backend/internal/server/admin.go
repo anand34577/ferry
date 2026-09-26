@@ -25,7 +25,7 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		"users": users, "files": files, "usedBytes": used, "activeShares": activeShares, "devices": devices,
 		"onlineDevices": onlineDevices, "pendingUploads": uploads, "activeTransfers": transfersActive,
 		"activeDownloads": s.metrics.downloadsActive.Load(), "activeUploads": s.metrics.uploadsActive.Load(),
-		"globalQuotaBytes": s.cfg.GlobalQuota, "storageHealthy": s.store.Healthy() == nil,
+		"globalQuotaBytes": s.conf().GlobalQuota, "storageHealthy": s.store.Healthy() == nil,
 	}
 	if ok {
 		resp["diskTotalBytes"], resp["diskFreeBytes"] = total, free
@@ -37,7 +37,8 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `SELECT u.id, u.email, u.name, u.role, u.disabled, u.quota_bytes, u.created_at, u.totp_enabled,
 		COALESCE((SELECT SUM(size) FROM files f WHERE f.user_id = u.id), 0),
 		COALESCE((SELECT COUNT(*) FROM files f WHERE f.user_id = u.id), 0),
-		COALESCE((SELECT MAX(last_seen) FROM sessions se WHERE se.user_id = u.id), 0)
+		COALESCE((SELECT MAX(last_seen) FROM sessions se WHERE se.user_id = u.id), 0),
+		(SELECT COUNT(*) FROM user_identities i WHERE i.user_id = u.id), CASE WHEN u.password_hash = '' THEN 0 ELSE 1 END
 		FROM users u ORDER BY u.created_at`)
 	if err != nil {
 		s.writeErr(w, r, err)
@@ -50,13 +51,15 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		FileCount      int   `json:"fileCount"`
 		LastActive     int64 `json:"lastActive"`
 		EffectiveQuota int64 `json:"effectiveQuotaBytes"`
+		SSO            int   `json:"ssoLinks"`
+		HasPassword    bool  `json:"hasPassword"`
 	}
 	out := []row{}
 	for rows.Next() {
 		u := &User{}
 		var dis int
 		var rw row
-		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &dis, &u.QuotaBytes, &u.CreatedAt, boolScan{&u.TOTP}, &rw.UsedBytes, &rw.FileCount, &rw.LastActive); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &dis, &u.QuotaBytes, &u.CreatedAt, boolScan{&u.TOTP}, &rw.UsedBytes, &rw.FileCount, &rw.LastActive, &rw.SSO, boolScan{&rw.HasPassword}); err != nil {
 			s.writeErr(w, r, err)
 			return
 		}
@@ -65,7 +68,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		rw.EffectiveQuota = s.userQuota(u)
 		out = append(out, rw)
 	}
-	writeJSON(w, 200, map[string]any{"users": out, "defaultQuotaBytes": s.cfg.DefaultUserQuota})
+	writeJSON(w, 200, map[string]any{"users": out, "defaultQuotaBytes": s.conf().DefaultUserQuota})
 }
 
 func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -270,44 +273,10 @@ func (s *Server) handleAdminDeleteDevice(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
-func (s *Server) handleAdminAudit(w http.ResponseWriter, r *http.Request) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 || limit > 1000 {
-		limit = 200
-	}
-	rows, err := s.db.Query(r.Context(), `SELECT a.id, a.at, a.user_id, COALESCE(u.email, ''), a.action, a.target, a.ip, a.detail
-		FROM audit_log a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.at DESC LIMIT ?`, limit)
-	if err != nil {
-		s.writeErr(w, r, err)
-		return
-	}
-	defer rows.Close()
-	type ev struct {
-		ID     string `json:"id"`
-		At     int64  `json:"at"`
-		UserID string `json:"userId"`
-		Email  string `json:"email"`
-		Action string `json:"action"`
-		Target string `json:"target"`
-		IP     string `json:"ip"`
-		Detail string `json:"detail"`
-	}
-	out := []ev{}
-	for rows.Next() {
-		var e ev
-		if err := rows.Scan(&e.ID, &e.At, &e.UserID, &e.Email, &e.Action, &e.Target, &e.IP, &e.Detail); err != nil {
-			s.writeErr(w, r, err)
-			return
-		}
-		out = append(out, e)
-	}
-	writeJSON(w, 200, map[string]any{"events": out})
-}
-
 func (s *Server) handleAdminSystem(w http.ResponseWriter, r *http.Request) {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	c := s.cfg
+	c := s.conf()
 	writeJSON(w, 200, map[string]any{
 		"version": s.version, "goVersion": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH,
 		"uptimeSeconds": int(time.Since(s.started).Seconds()), "memoryBytes": ms.Alloc, "goroutines": runtime.NumGoroutine(),
@@ -319,6 +288,7 @@ func (s *Server) handleAdminSystem(w http.ResponseWriter, r *http.Request) {
 			"uploadExpiry": c.UploadExpiry.String(), "downloadWindow": c.DownloadWindow.String(), "cleanupInterval": c.CleanupInterval.String(),
 			"rateLimitPerMinute": c.RateLimitPerMinute, "smtp": c.SMTPHost != "", "scanner": c.ScanCommand != "",
 			"trustedProxies": len(c.TrustedProxies), "corsOrigins": c.CORSOrigins,
+			"oidcIssuer": c.OIDC.Issuer, "oidcAutoCreate": c.OIDC.AutoCreate, "oidcLinkByEmail": c.OIDC.LinkByEmail, "oidcAdminGroup": c.OIDC.AdminGroup,
 		},
 		"logs": s.logs.Lines(),
 	})
@@ -328,4 +298,113 @@ func (s *Server) handleAdminCleanup(w http.ResponseWriter, r *http.Request) {
 	res := s.Cleanup(r.Context())
 	s.audit(r.Context(), r, userOf(r).ID, "admin_cleanup", "", "")
 	writeJSON(w, 200, res)
+}
+
+// ---------- admin powers: sign in as a user, links, sessions, email test ----------
+
+const adminReturnCookie = "ferry_admin_return"
+
+// handleAdminImpersonate signs the admin in as another user (web only). The admin's own session is
+// kept in a separate HttpOnly cookie so "Return to admin" restores it; everything done meanwhile is
+// audited on the user's account and tagged as an admin session.
+func (s *Server) handleAdminImpersonate(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	a := authOf(r)
+	if !a.cookie {
+		s.writeErr(w, r, errf(400, "web_only", "Signing in as a user is only available in the web app."))
+		return
+	}
+	if _, err := r.Cookie(adminReturnCookie); err == nil {
+		s.writeErr(w, r, errf(400, "already_impersonating", "Return to your admin account first."))
+		return
+	}
+	target, err := scanUser(s.db.QueryRow(ctx, `SELECT `+userCols+` FROM users WHERE id = ?`, r.PathValue("id")))
+	if err != nil {
+		s.writeErr(w, r, errNotFound)
+		return
+	}
+	if target.ID == a.user.ID || target.Disabled {
+		s.writeErr(w, r, errf(400, "cannot_impersonate", "You can only sign in as another, enabled account."))
+		return
+	}
+	adminTok, _ := s.sessionToken(r)
+	tok := newToken(32)
+	ttl := time.Hour
+	if err := s.insertSession(ctx, r, tok, target.ID, "", ttl, "Admin session ("+a.user.Email+")"); err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: adminReturnCookie, Value: adminTok, Path: "/", HttpOnly: true, Secure: s.secureCookie(r), SameSite: http.SameSiteLaxMode, MaxAge: int(ttl.Seconds())})
+	s.setSessionCookie(w, r, tok, ttl)
+	s.audit(ctx, r, a.user.ID, "admin_signed_in_as", target.ID, target.Email)
+	writeJSON(w, 200, map[string]any{"user": target})
+}
+
+// handleStopImpersonate ends an admin's "sign in as" session and restores the admin session.
+func (s *Server) handleStopImpersonate(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie(adminReturnCookie)
+	if err != nil {
+		s.writeErr(w, r, errf(400, "not_impersonating", "You are not signed in as another user."))
+		return
+	}
+	if r.Header.Get("X-Requested-With") != "ferry" {
+		s.writeErr(w, r, errf(403, "csrf", "Request blocked for security reasons. Please reload the page."))
+		return
+	}
+	secure := s.secureCookie(r)
+	http.SetCookie(w, &http.Cookie{Name: adminReturnCookie, Value: "", Path: "/", HttpOnly: true, Secure: secure, MaxAge: -1})
+	if tok, _ := s.sessionToken(r); tok != "" {
+		s.db.Exec(r.Context(), `DELETE FROM sessions WHERE id = ?`, hashToken(tok))
+	}
+	adm, err := s.authToken(r.Context(), c.Value, true)
+	if err != nil || adm.user.Role != "admin" {
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", HttpOnly: true, MaxAge: -1})
+		s.writeErr(w, r, errf(401, "session_expired", "Your admin session has ended. Please sign in again."))
+		return
+	}
+	s.setSessionCookie(w, r, c.Value, s.conf().SessionTTL)
+	s.audit(r.Context(), nil, adm.user.ID, "admin_returned", "", "")
+	writeJSON(w, 200, map[string]any{"user": adm.user})
+}
+
+func (s *Server) handleAdminDeleteShare(w http.ResponseWriter, r *http.Request) {
+	sh, err := scanShare(s.db.QueryRow(r.Context(), `SELECT `+shareCols+` FROM shares s WHERE s.id = ?`, r.PathValue("id")))
+	if err != nil {
+		s.writeErr(w, r, errNotFound)
+		return
+	}
+	if err := s.deleteShare(r.Context(), sh); err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	s.audit(r.Context(), r, userOf(r).ID, "admin_share_deleted", sh.ID, sh.Name)
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleAdminSignOutUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	res, err := s.db.Exec(r.Context(), `DELETE FROM sessions WHERE user_id = ? AND id <> ?`, id, authOf(r).sessionID)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	n, _ := res.RowsAffected()
+	s.streams.cancel("user:" + id)
+	s.audit(r.Context(), r, userOf(r).ID, "admin_user_signed_out", id, strconv.FormatInt(n, 10)+" session(s)")
+	writeJSON(w, 200, map[string]any{"ok": true, "sessions": n})
+}
+
+// handleAdminTestEmail sends a test message to the admin; the SMTP error is shown verbatim to help setup.
+func (s *Server) handleAdminTestEmail(w http.ResponseWriter, r *http.Request) {
+	u := userOf(r)
+	if s.conf().SMTPHost == "" {
+		s.writeErr(w, r, errf(400, "email_disabled", "Email is not configured. Set FERRY_SMTP_HOST and restart."))
+		return
+	}
+	if err := s.mail(u.Email, s.conf().SiteName+" test email", "Email delivery from "+s.conf().SiteName+" works.\n"); err != nil {
+		s.writeErr(w, r, errf(502, "email_failed", "Sending failed: "+err.Error()))
+		return
+	}
+	s.audit(r.Context(), r, u.ID, "admin_test_email", u.Email, "")
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }

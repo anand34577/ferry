@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { get, type Share } from "../lib/api";
+import { get, shareLink, type Share } from "../lib/api";
 import { relativeTime } from "../lib/format";
 import { Icon } from "../components/Icon";
 import { CopyField, QR, StatusChip, useAsync } from "../components/ui";
@@ -24,13 +24,13 @@ export function Receive() {
       <section className="panel receive-hero">
         {latest ? (
           <>
-            <QR value={latest.url} size={180} />
+            <QR value={shareLink(latest)} size={180} />
             <div className="grow">
               <h2>{latest.name}</h2>
               <p className="muted small">
                 {latest.uploadCount} file{latest.uploadCount === 1 ? "" : "s"} received · {latest.expiresAt ? "expires " + relativeTime(latest.expiresAt) : "no expiry"}
               </p>
-              <CopyField value={latest.url} />
+              <CopyField value={shareLink(latest)} />
               <div className="row-actions">
                 <button className="btn" onClick={() => navigate(`/files?folder=${latest.folderId}`)}>
                   <Icon name="folder" size={18} /> Open received files

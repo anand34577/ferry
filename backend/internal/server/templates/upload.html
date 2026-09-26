@@ -20,11 +20,12 @@
       <input type="text" name="uploader" maxlength="100" autocomplete="name"></label>
     <label class="drop" id="drop">
       <input type="file" name="files" multiple required {{if .AcceptAttr}}accept="{{.AcceptAttr}}"{{end}}>
+      <span class="drop-icon" aria-hidden="true"></span>
       <span class="drop-title">Choose files or drag them here</span>
-      <span class="drop-sub muted">Uploads resume automatically if your connection drops</span>
+      <span class="drop-sub muted">Uploading starts right away and resumes automatically if your connection drops</span>
     </label>
     <ul class="queue" id="queue" aria-live="polite"></ul>
-    <button class="btn primary" type="submit" id="upload-btn">Upload</button>
+    <button class="btn primary nojs-only" type="submit" id="upload-btn">Upload</button>
   </form>
   {{end}}
 

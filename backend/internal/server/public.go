@@ -40,6 +40,7 @@ type pageData struct {
 	CanDelete   bool
 	AcceptAttr  string
 	Now         int64
+	AssetVer    string
 }
 
 type pageEntry struct {
@@ -50,8 +51,9 @@ type pageEntry struct {
 }
 
 func (s *Server) render(w http.ResponseWriter, status int, tmpl string, d *pageData) {
-	d.SiteName = s.cfg.SiteName
+	d.SiteName = s.conf().SiteName
 	d.Now = nowMs()
+	d.AssetVer = assetVer
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
@@ -115,7 +117,7 @@ func scanDest(out **Share, extra ...any) []any {
 	dest := []any{&sh.ID, &sh.Token, &sh.UserID, &sh.Kind, &sh.Name, &sh.Message, &sh.passwordHash, &sh.ExpiresAt, &sh.MaxDownloads,
 		&sh.DownloadCount, boolScan{&sh.AllowDownload}, boolScan{&sh.AllowPreview}, boolScan{&sh.RequireAuth}, boolScan{&sh.AllowList},
 		boolScan{&sh.AllowDelete}, &sh.MaxFileBytes, &sh.MaxFiles, &sh.AllowedTypes, &sh.FolderID, &sh.UploadCount, &sh.UploadedBytes,
-		boolScan{&sh.Notify}, boolScan{&sh.Revoked}, &sh.LastAccess, &sh.CreatedAt, &sh.UpdatedAt}
+		boolScan{&sh.Notify}, boolScan{&sh.Revoked}, &sh.LastAccess, &sh.CreatedAt, &sh.UpdatedAt, &sh.ShortURL, &sh.shortID}
 	return append(dest, extra...)
 }
 
@@ -216,6 +218,7 @@ func (s *Server) unlock(w http.ResponseWriter, r *http.Request, sh *Share, tmpl 
 	}
 	if !checkPassword(sh.passwordHash, pw) {
 		s.audit(r.Context(), r, sh.UserID, "share_password_failed", sh.ID, "")
+		s.linkEvent(r.Context(), r, sh, "password_failed", "")
 		s.render(w, 401, tmpl, &pageData{Title: "Password required", Share: sh, Locked: true, Token: sh.Token, Error: "Incorrect password. Please try again."})
 		return
 	}
@@ -242,7 +245,7 @@ func (s *Server) handleSharePage(w http.ResponseWriter, r *http.Request) {
 	if !ok || !s.gate(w, r, sh, "share.html", true) {
 		return
 	}
-	d := &pageData{Title: sh.Name, Share: sh, Token: sh.Token, Owner: sh.OwnerName, WindowHours: int(s.cfg.DownloadWindow.Hours())}
+	d := &pageData{Title: sh.Name, Share: sh, Token: sh.Token, Owner: sh.OwnerName, WindowHours: int(s.conf().DownloadWindow.Hours())}
 	hasSession := s.validDownloadSession(r, sh) != ""
 	if sh.Status == "exhausted" && !hasSession {
 		heading := "Download limit reached"
@@ -269,6 +272,7 @@ func (s *Server) handleSharePage(w http.ResponseWriter, r *http.Request) {
 		d.Remaining = sh.MaxDownloads - sh.DownloadCount
 	}
 	s.db.Exec(r.Context(), `UPDATE shares SET last_access = ? WHERE id = ?`, nowMs(), sh.ID)
+	s.linkEvent(r.Context(), r, sh, "view", "")
 	s.render(w, 200, "share.html", d)
 }
 
@@ -310,16 +314,21 @@ func (s *Server) claimDownload(w http.ResponseWriter, r *http.Request, sh *Share
 		return errf(410, "limit_reached", "This link has reached its download limit.")
 	}
 	tok := newToken(24)
-	exp := now + s.cfg.DownloadWindow.Milliseconds()
+	exp := now + s.conf().DownloadWindow.Milliseconds()
 	if _, err := s.db.Exec(ctx, `INSERT INTO download_sessions (id, share_id, created_at, expires_at, ip) VALUES (?, ?, ?, ?, ?)`,
 		hashToken(tok), sh.ID, now, exp, s.clientIP(r)); err != nil {
 		return err
 	}
 	http.SetCookie(w, &http.Cookie{Name: s.dsCookieName(sh), Value: tok, Path: "/s/" + sh.Token, HttpOnly: true,
-		Secure: s.secureCookie(r), SameSite: http.SameSiteLaxMode, MaxAge: int(s.cfg.DownloadWindow.Seconds())})
+		Secure: s.secureCookie(r), SameSite: http.SameSiteLaxMode, MaxAge: int(s.conf().DownloadWindow.Seconds())})
 	w.Header().Set("Ferry-Download-Session", tok)
 	r.Header.Set("X-Download-Session", tok)
-	s.audit(ctx, r, sh.UserID, "share_downloaded", sh.ID, "")
+	s.audit(ctx, r, sh.UserID, "share_downloaded", sh.ID, sh.Name)
+	if sh.Notify {
+		if owner, err := s.uploadOwner(ctx, sh); err == nil {
+			go s.notifyOwner(owner, sh, "Link downloaded: "+sh.Name, "Someone downloaded \""+sh.Name+"\" from your link on "+s.conf().SiteName+".")
+		}
+	}
 	return nil
 }
 
@@ -378,6 +387,13 @@ func (s *Server) handleShareDownload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if firstRange(r) {
+		kind := "download"
+		if inline {
+			kind = "preview"
+		}
+		s.linkEvent(r.Context(), r, sh, kind, f.Name)
+	}
 	s.serveFile(w, r, f, inline, "share:"+sh.ID, "user:"+sh.UserID)
 }
 
@@ -408,6 +424,7 @@ func (s *Server) handleShareZip(w http.ResponseWriter, r *http.Request) {
 		s.publicErr(w, r, err)
 		return
 	}
+	s.linkEvent(r.Context(), r, sh, "download", "All files (zip)")
 	if err := s.streamZip(w, r, cleanName(sh.Name)+".zip", entries, "share:"+sh.ID, "user:"+sh.UserID); err != nil {
 		s.publicErr(w, r, err)
 	}
@@ -436,6 +453,7 @@ func (s *Server) handleUploadPage(w http.ResponseWriter, r *http.Request) {
 	if !ok || !s.gate(w, r, sh, "upload.html", true) {
 		return
 	}
+	s.linkEvent(r.Context(), r, sh, "view", "")
 	s.renderUploadPage(w, r, sh, 200, "", "")
 }
 
@@ -552,8 +570,8 @@ func (s *Server) receivePart(ctx context.Context, sh *Share, owner *User, part *
 	if sh.MaxFileBytes > 0 {
 		limit = sh.MaxFileBytes
 	}
-	if s.cfg.MaxUploadBytes > 0 && s.cfg.MaxUploadBytes < limit {
-		limit = s.cfg.MaxUploadBytes
+	if s.conf().MaxUploadBytes > 0 && s.conf().MaxUploadBytes < limit {
+		limit = s.conf().MaxUploadBytes
 	}
 	// The size is unknown until the part ends, so stop reading once the quota would be exceeded
 	// instead of writing an arbitrarily large file to disk first.

@@ -271,12 +271,14 @@ export function Files() {
           <button className="btn primary" onClick={() => fileInput.current?.click()}>
             <Icon name="upload" size={18} /> Upload
           </button>
-          <input ref={fileInput} type="file" multiple hidden onChange={(e) => (startUpload(Array.from(e.target.files ?? [])), (e.target.value = ""))} />
+          <input ref={fileInput} type="file" multiple className="file-input" tabIndex={-1} aria-hidden="true" onChange={(e) => (startUpload(Array.from(e.target.files ?? [])), (e.target.value = ""))} />
           <input
             ref={folderInput}
             type="file"
             multiple
-            hidden
+            className="file-input"
+            tabIndex={-1}
+            aria-hidden="true"
             // @ts-expect-error non-standard but universally supported attribute
             webkitdirectory=""
             onChange={(e) => (startUpload(Array.from(e.target.files ?? [])), (e.target.value = ""))}

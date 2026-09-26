@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ApiError, get, patch, post, type Device, type Folder, type Listing, type Share, type Transfer } from "../lib/api";
+import { ApiError, get, patch, post, type Device, type Folder, type Listing, type Share, type Transfer, shareLink } from "../lib/api";
 import { formatBytes, isFinalStatus, relativeTime, statusLabel } from "../lib/format";
 import { uploads, useUploads } from "../lib/uploads";
 import { Icon } from "../components/Icon";
@@ -32,7 +32,12 @@ export function Send() {
     return () => clearInterval(t);
   }, [transfer]);
 
-  const add = (list: FileList | null) => list && setFiles((f) => [...f, ...Array.from(list)]);
+  // Copy the FileList now: it's live, and resetting the input's value (to allow re-picking) empties it
+  // before a deferred state update would read it.
+  const add = (list: FileList | null) => {
+    const picked = Array.from(list ?? []);
+    if (picked.length) setFiles((f) => [...f, ...picked]);
+  };
 
   const sentFolder = async (): Promise<string> => {
     try {
@@ -210,8 +215,8 @@ export function Send() {
           )}
           {created && (
             <div className="share-result">
-              <QR value={created.url} size={160} />
-              <CopyField value={created.url} />
+              <QR value={shareLink(created)} size={160} />
+              <CopyField value={shareLink(created)} />
             </div>
           )}
         </section>

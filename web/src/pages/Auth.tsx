@@ -1,8 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
-import { ApiError, post, type User } from "../lib/api";
+import { ApiError, del, get, post, type User } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { ErrorBox } from "../components/ui";
+import { ErrorBox, useToast } from "../components/ui";
+import { Icon } from "../components/Icon";
+
+interface PendingSSO {
+  provider: string;
+  email: string;
+  name: string;
+}
 
 // Handles first-run setup, sign-in and (if enabled) sign-up.
 export function AuthPage({ mode }: { mode: "login" | "setup" | "forgot" | "reset" }) {
@@ -23,13 +30,63 @@ function SignIn({ mode }: { mode: "login" | "setup" }) {
   const [busy, setBusy] = useState(false);
   const [needCode, setNeedCode] = useState(false);
   const [code, setCode] = useState("");
+  const [pending, setPending] = useState<PendingSSO | null>(null);
+  const [confirmLink, setConfirmLink] = useState<User | null>(null);
+  const toast = useToast();
+  const sso = info?.oidc;
+  const ssoError = params.get("sso_error");
+
+  useEffect(() => {
+    if (sso) get<{ pending: PendingSSO | null }>("/api/v1/auth/oidc/pending").then((r) => setPending(r.pending)).catch(() => {});
+  }, [sso]);
 
   const isSetup = mode === "setup" || setupNeeded;
   const next = params.get("next");
   // Only same-site relative paths are followed (no open redirects).
   const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
 
-  if (user) {
+  const go = () => {
+    if (safeNext.startsWith("/s/") || safeNext.startsWith("/u/")) window.location.replace(safeNext);
+    else navigate(safeNext, { replace: true });
+  };
+  const connect = async (yes: boolean) => {
+    try {
+      if (yes) {
+        await post("/api/v1/auth/oidc/link");
+        toast.ok(`${pending?.provider} is connected — next time just use “Sign in with ${pending?.provider}”.`);
+      } else await del("/api/v1/auth/oidc/pending");
+    } catch (err) {
+      toast.error(err);
+    }
+    setPending(null);
+    setConfirmLink(null);
+    go();
+  };
+
+  if (confirmLink && pending) {
+    return (
+      <div className="auth">
+        <div className="auth-card">
+          <div className="empty-icon big">
+            <Icon name="link" size={30} />
+          </div>
+          <h1>Connect {pending.provider}?</h1>
+          <p className="muted">
+            Connect the {pending.provider} account <strong>{pending.email || pending.name}</strong> to your {info?.siteName ?? "Ferry"} account <strong>{confirmLink.email}</strong>. After that, you can
+            sign in with {pending.provider} directly. You can disconnect it any time in Settings.
+          </p>
+          <button className="btn primary block" onClick={() => connect(true)}>
+            Connect accounts
+          </button>
+          <button className="btn block" onClick={() => connect(false)}>
+            Not now
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (user && !confirmLink) {
     if (safeNext.startsWith("/s/") || safeNext.startsWith("/u/")) {
       window.location.replace(safeNext); // server-rendered share pages
       return null;
@@ -49,9 +106,9 @@ function SignIn({ mode }: { mode: "login" | "setup" }) {
     try {
       const path = isSetup ? "/api/v1/setup" : signup ? "/api/v1/auth/signup" : "/api/v1/auth/login";
       const res = await post<{ user: User }>(path, { email, password, name, ...(needCode ? { code } : {}) });
+      if (pending && !isSetup) setConfirmLink(res.user);
       setUser(res.user);
-      if (safeNext.startsWith("/s/") || safeNext.startsWith("/u/")) window.location.replace(safeNext);
-      else navigate(safeNext, { replace: true });
+      if (!pending || isSetup) go();
     } catch (err) {
       if (err instanceof ApiError && err.code === "totp_required") setNeedCode(true);
       else setError(err);
@@ -73,7 +130,33 @@ function SignIn({ mode }: { mode: "login" | "setup" }) {
             ? "Create the administrator account for this server. You can add more people later."
             : "Send files to anyone, anywhere — with or without the internet."}
         </p>
+        {ssoError && !pending && <ErrorBox error={new Error(ssoError)} />}
+        {pending && !isSetup && (
+          <div className="notice" role="status">
+            <Icon name="link" size={20} />
+            <div>
+              <strong>One more step to connect {pending.provider}</strong>
+              <p>
+                {pending.email || pending.name} isn't connected to an account here yet. Sign in below with your existing {info?.siteName ?? "Ferry"} account to connect them — you only need to do this once.
+                {!sso?.autoCreate && " No account yet? Ask your administrator to create one for you."}
+              </p>
+              <button className="link-btn" onClick={() => del("/api/v1/auth/oidc/pending").finally(() => setPending(null))}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         {error != null && <ErrorBox error={error} />}
+        {sso && !isSetup && !signup && !pending && (
+          <>
+            <a className="btn block sso-btn" href={`/api/v1/auth/oidc/start?next=${encodeURIComponent(safeNext)}`}>
+              <Icon name="shield" size={18} /> Sign in with {sso.name}
+            </a>
+            <div className="or" aria-hidden="true">
+              <span>or use your password</span>
+            </div>
+          </>
+        )}
         <form onSubmit={submit} className="form">
           {(isSetup || signup) && (
             <label className="field">

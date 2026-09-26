@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -240,7 +241,7 @@ func (s *Server) userQuota(u *User) int64 {
 	if u.QuotaBytes >= 0 {
 		return u.QuotaBytes
 	}
-	return s.cfg.DefaultUserQuota
+	return s.conf().DefaultUserQuota
 }
 
 func (s *Server) usedBytes(ctx context.Context, userID string) (used, pending int64, err error) {
@@ -254,8 +255,8 @@ func (s *Server) usedBytes(ctx context.Context, userID string) (used, pending in
 // checkQuota rejects an incoming upload of n bytes that would exceed any configured limit.
 // In-progress uploads count as reserved so parallel uploads cannot overshoot.
 func (s *Server) checkQuota(ctx context.Context, u *User, n int64) error {
-	if s.cfg.MaxUploadBytes > 0 && n > s.cfg.MaxUploadBytes {
-		return errf(413, "file_too_large", "This file is larger than the server's upload limit of "+humanSize(s.cfg.MaxUploadBytes)+".")
+	if s.conf().MaxUploadBytes > 0 && n > s.conf().MaxUploadBytes {
+		return errf(413, "file_too_large", "This file is larger than the server's upload limit of "+humanSize(s.conf().MaxUploadBytes)+".")
 	}
 	if q := s.userQuota(u); q > 0 {
 		used, pending, err := s.usedBytes(ctx, u.ID)
@@ -280,7 +281,7 @@ func (s *Server) checkQuota(ctx context.Context, u *User, n int64) error {
 // counting bytes still owed to in-progress uploads.
 func (s *Server) serverRoom(ctx context.Context) (int64, error) {
 	room := int64(math.MaxInt64)
-	if s.cfg.GlobalQuota <= 0 && s.cfg.MinFreeSpace <= 0 {
+	if s.conf().GlobalQuota <= 0 && s.conf().MinFreeSpace <= 0 {
 		return room, nil
 	}
 	var used, pending, owed int64
@@ -290,12 +291,12 @@ func (s *Server) serverRoom(ctx context.Context) (int64, error) {
 	if err := s.db.QueryRow(ctx, `SELECT COALESCE(SUM(size), 0), COALESCE(SUM(size - received), 0) FROM uploads WHERE file_id = ''`).Scan(&pending, &owed); err != nil {
 		return 0, err
 	}
-	if s.cfg.GlobalQuota > 0 {
-		room = min(room, s.cfg.GlobalQuota-used-pending)
+	if s.conf().GlobalQuota > 0 {
+		room = min(room, s.conf().GlobalQuota-used-pending)
 	}
-	if s.cfg.MinFreeSpace > 0 {
+	if s.conf().MinFreeSpace > 0 {
 		if _, free, ok := s.store.Usage(); ok {
-			room = min(room, int64(free)-owed-s.cfg.MinFreeSpace)
+			room = min(room, int64(free)-owed-s.conf().MinFreeSpace)
 		}
 	}
 	return max(room, 0), nil
@@ -327,7 +328,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	var count int
 	s.db.QueryRow(r.Context(), `SELECT COUNT(*) FROM files WHERE user_id = ? AND transfer_id = ''`, u.ID).Scan(&count)
 	writeJSON(w, 200, map[string]any{"usedBytes": used, "pendingBytes": pending, "quotaBytes": s.userQuota(u), "fileCount": count,
-		"maxUploadBytes": s.cfg.MaxUploadBytes})
+		"maxUploadBytes": s.conf().MaxUploadBytes})
 }
 
 // ---------- listing ----------
@@ -476,6 +477,7 @@ func (s *Server) handleCreateFolder(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	s.audit(r.Context(), r, u.ID, "folder_created", f.ID, f.Name)
 	writeJSON(w, 201, f)
 }
 
@@ -513,6 +515,7 @@ func (s *Server) handleUpdateFolder(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	s.audit(r.Context(), r, u.ID, "folder_updated", f.ID, f.Name)
 	writeJSON(w, 200, f)
 }
 
@@ -583,19 +586,22 @@ func (s *Server) handleUpdateFile(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	s.audit(r.Context(), r, u.ID, "file_updated", f.ID, f.Name)
 	writeJSON(w, 200, f)
 }
 
 func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	u := userOf(r)
-	if _, err := s.getFile(r.Context(), u.ID, r.PathValue("id")); err != nil {
+	f, err := s.getFile(r.Context(), u.ID, r.PathValue("id"))
+	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	if err := s.deleteItems(r.Context(), u.ID, []string{r.PathValue("id")}, nil); err != nil {
+	if err := s.deleteItems(r.Context(), u.ID, []string{f.ID}, nil); err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
+	s.audit(r.Context(), r, u.ID, "file_deleted", f.ID, f.Name)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -675,6 +681,7 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 			s.writeErr(w, r, err)
 			return
 		}
+		s.audit(ctx, r, u.ID, "items_deleted", "", itemCount(req.FileIDs, req.FolderIDs))
 		writeJSON(w, 200, map[string]any{"ok": true})
 	case "move":
 		if err := s.checkMoveTarget(ctx, u.ID, req.FolderIDs, req.TargetFolderID); err != nil {
@@ -701,6 +708,7 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 				failed = append(failed, id)
 			}
 		}
+		s.audit(ctx, r, u.ID, "items_moved", req.TargetFolderID, itemCount(req.FileIDs, req.FolderIDs))
 		resp := map[string]any{"ok": len(failed) == 0, "failed": failed}
 		if len(failed) > 0 {
 			resp["message"] = "Some items were not moved because an item with the same name already exists in the destination."
@@ -967,4 +975,8 @@ func (s *Server) streamZip(w http.ResponseWriter, r *http.Request, name string, 
 	}
 	zw.Close()
 	return nil
+}
+
+func itemCount(files, folders []string) string {
+	return strconv.Itoa(len(files)) + " file(s), " + strconv.Itoa(len(folders)) + " folder(s)"
 }

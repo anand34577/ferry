@@ -55,7 +55,7 @@ func newTestServer(t *testing.T, mut func(*config.Config)) (*Server, *httptest.S
 	}
 	t.Cleanup(func() { d.Close() })
 	if cfg.DBDriver == "postgres" {
-		for _, tbl := range []string{"password_resets", "audit_log", "transfers", "download_sessions", "share_items", "shares", "uploads", "files", "folders", "sessions", "devices", "users", "settings", "schema_migrations"} {
+		for _, tbl := range []string{"user_identities", "share_events", "password_resets", "audit_log", "transfers", "download_sessions", "share_items", "shares", "uploads", "files", "folders", "sessions", "devices", "users", "settings", "schema_migrations"} {
 			d.Exec(context.Background(), "DROP TABLE IF EXISTS "+tbl+" CASCADE")
 		}
 	}
@@ -462,14 +462,14 @@ func TestExpiryAndCleanup(t *testing.T) {
 	// Deleting a file removes its blob; missing blob vs storage outage are distinguished.
 	f := admin.json("GET", "/api/v1/files/"+id, nil, 200)
 	_ = f
-	os.Remove(filepath.Join(s.cfg.StoragePath, "blobs", "x"))
+	os.Remove(filepath.Join(s.conf().StoragePath, "blobs", "x"))
 	var blob string
 	s.db.QueryRow(context.Background(), `SELECT blob FROM files WHERE id = ?`, id).Scan(&blob)
-	os.Remove(filepath.Join(s.cfg.StoragePath, "blobs", blob[:2], blob))
+	os.Remove(filepath.Join(s.conf().StoragePath, "blobs", blob[:2], blob))
 	if r, b := admin.do("GET", "/api/v1/files/"+id+"/content", nil, nil); r.StatusCode != 404 || !strings.Contains(string(b), "file_missing") {
 		t.Fatal("missing blob", r.StatusCode, string(b))
 	}
-	os.Remove(filepath.Join(s.cfg.StoragePath, ".ferry-storage"))
+	os.Remove(filepath.Join(s.conf().StoragePath, ".ferry-storage"))
 	if r, b := admin.do("GET", "/api/v1/files/"+id+"/content", nil, nil); r.StatusCode != 503 || !strings.Contains(string(b), "storage_unavailable") {
 		t.Fatal("storage outage", r.StatusCode, string(b))
 	}

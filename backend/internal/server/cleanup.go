@@ -18,7 +18,7 @@ import (
 // RunCleanup runs Cleanup every interval until ctx ends. Every step is idempotent.
 func (s *Server) RunCleanup(ctx context.Context) {
 	s.Cleanup(ctx)
-	t := time.NewTicker(s.cfg.CleanupInterval)
+	t := time.NewTicker(s.conf().CleanupInterval)
 	defer t.Stop()
 	for {
 		select {
@@ -50,7 +50,7 @@ func (s *Server) Cleanup(ctx context.Context) map[string]int64 {
 	exec("passwordResets", `DELETE FROM password_resets WHERE expires_at < ?`, now)
 
 	// Stale in-progress uploads.
-	stale := now - s.cfg.UploadExpiry.Milliseconds()
+	stale := now - s.conf().UploadExpiry.Milliseconds()
 	if rows, err := s.db.Query(ctx, `SELECT id FROM uploads WHERE file_id = '' AND updated_at < ?`, stale); err == nil {
 		var ids []string
 		for rows.Next() {
@@ -102,7 +102,7 @@ func (s *Server) Cleanup(ctx context.Context) map[string]int64 {
 	}
 
 	// Expired/revoked shares are kept visible for a while, then removed.
-	keep := now - s.cfg.ShareRetention.Milliseconds()
+	keep := now - s.conf().ShareRetention.Milliseconds()
 	if rows, err := s.db.Query(ctx, `SELECT `+shareCols+` FROM shares s WHERE (s.expires_at > 0 AND s.expires_at < ?) OR (s.revoked = 1 AND s.updated_at < ?)`, keep, keep); err == nil {
 		var list []*Share
 		for rows.Next() {
@@ -116,7 +116,8 @@ func (s *Server) Cleanup(ctx context.Context) map[string]int64 {
 			res["oldShares"]++
 		}
 	}
-	exec("audit", `DELETE FROM audit_log WHERE at < ?`, now-s.cfg.AuditRetention.Milliseconds())
+	exec("audit", `DELETE FROM audit_log WHERE at < ?`, now-s.conf().AuditRetention.Milliseconds())
+	exec("linkEvents", `DELETE FROM share_events WHERE at < ?`, now-s.conf().AuditRetention.Milliseconds())
 	res["orphanBlobs"] = s.sweepOrphans(ctx)
 	if total := sum(res); total > 0 {
 		s.log.Info("cleanup finished", "result", res)
@@ -164,7 +165,7 @@ func (s *Server) sweepOrphans(ctx context.Context) int64 {
 // ---------- email ----------
 
 func (s *Server) sendMail(to, subject, body string) error {
-	c := s.cfg
+	c := s.conf()
 	if c.SMTPHost == "" {
 		return fmt.Errorf("smtp not configured")
 	}
@@ -178,16 +179,14 @@ func (s *Server) sendMail(to, subject, body string) error {
 	msg := "From: " + sender + "\r\nTo: " + to + "\r\nSubject: " + subject +
 		"\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\n" + body
 	addr := net.JoinHostPort(c.SMTPHost, strconv.Itoa(c.SMTPPort))
-	var auth smtp.Auth
-	if c.SMTPUser != "" {
-		auth = smtp.PlainAuth("", c.SMTPUser, c.SMTPPass, c.SMTPHost)
-	}
+	tlsCfg := &tls.Config{ServerName: c.SMTPHost, InsecureSkipVerify: c.SMTPSkipVerify} //nolint:gosec // opt-in via FERRY_SMTP_SKIP_VERIFY
+	implicitTLS := c.SMTPSecurity == "tls" || (c.SMTPSecurity == "auto" && c.SMTPPort == 465)
 	// Explicit dial + deadline: smtp.SendMail has no timeout and would hang forever on a stuck server.
 	d := &net.Dialer{Timeout: 30 * time.Second}
 	var conn net.Conn
 	var err error
-	if c.SMTPPort == 465 {
-		conn, err = tls.DialWithDialer(d, "tcp", addr, &tls.Config{ServerName: c.SMTPHost})
+	if implicitTLS {
+		conn, err = tls.DialWithDialer(d, "tcp", addr, tlsCfg)
 	} else {
 		conn, err = d.Dial("tcp", addr)
 	}
@@ -201,14 +200,22 @@ func (s *Server) sendMail(to, subject, body string) error {
 		return err
 	}
 	defer cl.Close()
-	if ok, _ := cl.Extension("STARTTLS"); ok && c.SMTPPort != 465 {
-		if err := cl.StartTLS(&tls.Config{ServerName: c.SMTPHost}); err != nil {
-			return err
+	if !implicitTLS && c.SMTPSecurity != "none" {
+		ok, _ := cl.Extension("STARTTLS")
+		if !ok && c.SMTPSecurity == "starttls" {
+			return fmt.Errorf("smtp server does not offer STARTTLS (set FERRY_SMTP_SECURITY=none for a plain relay)")
+		}
+		if ok {
+			if err := cl.StartTLS(tlsCfg); err != nil {
+				return err
+			}
 		}
 	}
-	if auth != nil {
-		if err := cl.Auth(auth); err != nil {
-			return err
+	if c.SMTPUser != "" {
+		if ok, _ := cl.Extension("AUTH"); ok {
+			if err := cl.Auth(smtpAuth(cl, c.SMTPUser, c.SMTPPass, c.SMTPHost)); err != nil {
+				return err
+			}
 		}
 	}
 	if err := cl.Mail(from); err != nil {
@@ -230,23 +237,62 @@ func (s *Server) sendMail(to, subject, body string) error {
 	return cl.Quit()
 }
 
+// smtpAuth picks PLAIN or LOGIN from what the server advertises. Go's PlainAuth refuses to send
+// credentials over an unencrypted connection to anything but localhost; with FERRY_SMTP_SECURITY=none
+// the admin explicitly chose a plain relay (e.g. a local SMTP proxy), so that check is waived.
+func smtpAuth(cl *smtp.Client, user, pass, host string) smtp.Auth {
+	_, mechs := cl.Extension("AUTH")
+	if !strings.Contains(strings.ToUpper(mechs), "PLAIN") && strings.Contains(strings.ToUpper(mechs), "LOGIN") {
+		return &loginAuth{user, pass}
+	}
+	return plainAuth{smtp.PlainAuth("", user, pass, host)}
+}
+
+type plainAuth struct{ smtp.Auth }
+
+func (a plainAuth) Start(si *smtp.ServerInfo) (string, []byte, error) {
+	si.TLS = true // see smtpAuth: the connection security is the admin's choice
+	return a.Auth.Start(si)
+}
+
+type loginAuth struct{ user, pass string }
+
+func (a *loginAuth) Start(*smtp.ServerInfo) (string, []byte, error) { return "LOGIN", nil, nil }
+func (a *loginAuth) Next(from []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	if strings.Contains(strings.ToLower(string(from)), "user") {
+		return []byte(a.user), nil
+	}
+	return []byte(a.pass), nil
+}
+
 func (s *Server) notifyUpload(owner *User, sh *Share, f *File, uploader string) {
-	if s.cfg.SMTPHost == "" {
-		return
-	}
-	// Coalesce bursts: at most one notification per link per 10 minutes.
-	if !s.limiter.allow("notify:"+sh.ID, 1, 10*time.Minute) {
-		return
-	}
 	who := "Someone"
 	if uploader != "" {
 		who = uploader
 	}
-	body := who + " uploaded \"" + f.Name + "\" (" + humanSize(f.Size) + ") to your upload link \"" + sh.Name + "\" on " + s.cfg.SiteName + ".\n"
-	if s.cfg.PublicURL != "" {
-		body += "\nOpen your files: " + s.cfg.PublicURL + "/files\n"
+	body := who + " uploaded \"" + f.Name + "\" (" + humanSize(f.Size) + ") to your upload link \"" + sh.Name + "\" on " + s.conf().SiteName + "."
+	s.notifyOwner(owner, sh, "New files received: "+sh.Name, body)
+}
+
+// notifyOwner emails and/or pushes (Gotify) a link event to its owner.
+// Bursts are coalesced: at most one notification per link per 10 minutes.
+func (s *Server) notifyOwner(owner *User, sh *Share, title, body string) {
+	if !s.limiter.allow("notify:"+sh.ID, 1, 10*time.Minute) {
+		return
 	}
-	if err := s.mail(owner.Email, "New files received: "+sh.Name, body); err != nil {
-		s.log.Warn("upload notification failed", "err", err)
+	if s.conf().SMTPHost != "" {
+		mailBody := body + "\n"
+		if s.conf().PublicURL != "" {
+			mailBody += "\nOpen " + s.conf().SiteName + ": " + s.conf().PublicURL + "/links\n"
+		}
+		if err := s.mail(owner.Email, title, mailBody); err != nil {
+			s.log.Warn("link notification email failed", "err", err)
+		}
+	}
+	if err := s.gotify(context.Background(), owner.ID, title, body); err != nil {
+		s.log.Warn("gotify notification failed", "err", err)
 	}
 }

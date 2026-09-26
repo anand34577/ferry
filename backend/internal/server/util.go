@@ -109,7 +109,7 @@ func (s *Server) clientIP(r *http.Request) string {
 }
 
 func (s *Server) trusted(ip net.IP) bool {
-	for _, n := range s.cfg.TrustedProxies {
+	for _, n := range s.conf().TrustedProxies {
 		if n.Contains(ip) {
 			return true
 		}
@@ -130,19 +130,19 @@ func (s *Server) isHTTPS(r *http.Request) bool {
 }
 
 func (s *Server) secureCookie(r *http.Request) bool {
-	switch s.cfg.CookieSecure {
+	switch s.conf().CookieSecure {
 	case "true":
 		return true
 	case "false":
 		return false
 	}
-	return s.isHTTPS(r) || strings.HasPrefix(s.cfg.PublicURL, "https://")
+	return s.isHTTPS(r) || strings.HasPrefix(s.conf().PublicURL, "https://")
 }
 
 // baseURL is the externally visible origin used to build share links.
 func (s *Server) baseURL(r *http.Request) string {
-	if s.cfg.PublicURL != "" {
-		return s.cfg.PublicURL
+	if s.conf().PublicURL != "" {
+		return s.conf().PublicURL
 	}
 	scheme := "http"
 	if s.isHTTPS(r) {

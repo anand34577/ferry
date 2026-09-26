@@ -59,6 +59,25 @@ In **Send**, choose one of your signed-in devices instead of **Create a link**. 
 
 **History** lists transfers from all your devices: links, device-to-device transfers and uploads. Filter by sent, received or failed. Clearing history never deletes files.
 
+## Link analytics
+
+On **Links**, the chart icon (or **⋯ → Analytics**) shows how a link is used: how often it was opened, downloaded or previewed, files received, unique visitors, wrong password attempts, a day-by-day chart, browsers, where visitors came from, and a log of recent activity with time and IP address.
+
+## Notifications
+
+Turn on **Notify me when someone downloads** (share links) or **Notify me when files arrive** (upload links) when creating or editing a link. You get at most one notification per link every 10 minutes:
+
+- by **email**, when the server has email set up, and
+- as a **push message through Gotify**: in **Settings → Notifications**, enter your Gotify server address and an application token (in Gotify: *Apps → Create application*), save, and use **Send test**.
+
+## Short links
+
+If the administrator connected a URL shortener, links get a short address automatically — it's what **Copy**, the QR code and emails use. The full address is shown underneath and keeps working. For older links use **⋯ → Create short link**.
+
+## Upload links: what uploaders see
+
+People opening an upload link choose files or drag them anywhere onto the page — uploading starts right away, with progress for each file, and resumes by itself if the connection drops.
+
 ## Account and security
 
 Everything is under **Settings**.
@@ -67,4 +86,5 @@ Everything is under **Settings**.
 - **Two-factor sign-in.** Choose **Set up**, scan the QR code with an authenticator app (Google Authenticator, Microsoft Authenticator, Aegis, 1Password and others), and enter the code it shows. From then on, signing in asks for a code from the app. If you lose your phone, ask your administrator to turn it off.
 - **Where you're signed in.** Lists every browser and app on your account. Sign out any one of them, or all others at once.
 - **Forgot your password?** Use **Forgot your password?** on the sign-in page. The emailed link works once, for one hour. (Available when your server has email set up; otherwise ask your administrator.)
-- **Appearance.** System, light or dark theme.
+- **Appearance.** 12 themes: System (follows your device), Light, Dark, Ocean, Forest, Sunset, Rose, Sepia, Midnight, Nord, Grape and High contrast. Saved per browser.
+- **Single sign-on.** If your server offers **Sign in with …** (Keycloak, Google, …), use that button. The first time, you may be asked to sign in once with your Ferry password to connect the accounts. See connected accounts under **Settings → Connected accounts**; accounts created through single sign-on can add a password under **Settings → Set a password** (needed for the Android app). Details: [Single sign-on](sso.md#what-users-see).
