@@ -63,6 +63,7 @@ jobs:
       - uses: docker/login-action@v3
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
       - uses: docker/build-push-action@v6
+        env: { DOCKER_BUILD_RECORD_UPLOAD: "false" }
         with:
           context: .
           platforms: linux/amd64,linux/arm64,linux/arm/v7
@@ -76,8 +77,11 @@ jobs:
     needs: [binaries, android, image]
     runs-on: ubuntu-latest
     steps:
+      # Only the release files (the Docker build also uploads a build-record artifact).
       - uses: actions/download-artifact@v4
-        with: { path: dist, merge-multiple: true }
+        with: { name: binaries, path: dist }
+      - uses: actions/download-artifact@v4
+        with: { name: android, path: dist }
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
@@ -85,5 +89,18 @@ jobs:
           files: dist/*
           generate_release_notes: true
           body: |
-            Container image: `ghcr.io/${{ github.repository_owner }}/ferry:${{ github.ref_name }}`
+            ## Install
+
+            **Docker**
+            ```
+            docker run -d --name ferry --restart unless-stopped -p 8080:8080 -v ferry-data:/data ghcr.io/${{ github.repository_owner }}/ferry:${{ github.ref_name }}
+            ```
+
+            **Program** — download the archive for your system below, unpack it and run `ferry` (Windows: `ferry.exe`).
+            To run it as a service that starts automatically: `sudo ./ferry service install` (Windows: `.\ferry.exe service install` in an Administrator terminal).
+
+            **Android** — install `ferry_${{ github.ref_name }}.apk` on your phone.
+
+            Then open http://localhost:8080 and create the administrator account. Guides: [documentation](https://github.com/${{ github.repository }}/tree/main/docs).
+
             Verify downloads with `sha256sum -c SHA256SUMS.txt`.
