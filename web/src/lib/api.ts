@@ -84,7 +84,7 @@ export interface Share {
   createdAt: number;
   updatedAt: number;
   status: "active" | "expired" | "revoked" | "exhausted";
-  items?: { type: "file" | "folder"; id: string; name: string; size?: number }[];
+  items?: { type: "file" | "folder"; id: string; name: string; size?: number; folderId: string }[];
   itemCount: number;
   ownerEmail?: string;
   shortUrl: string;

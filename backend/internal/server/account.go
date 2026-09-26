@@ -8,6 +8,7 @@ import (
 	"crypto/sha1"
 	"crypto/subtle"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -213,34 +214,64 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	if !s.limiter.allow("reset:"+s.clientIP(r), 20, time.Hour) {
-		s.writeErr(w, r, errf(429, "rate_limited", "Too many attempts. Please try again later."))
+	if err := s.resetPassword(r, req.Token, req.Password); err != nil {
+		s.writeErr(w, r, err)
 		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// resetPassword uses a one-hour reset token from the emailed link.
+func (s *Server) resetPassword(r *http.Request, token, password string) error {
+	if !s.limiter.allow("reset:"+s.clientIP(r), 20, time.Hour) {
+		return errf(429, "rate_limited", "Too many attempts. Please try again later.")
 	}
 	invalid := errf(400, "invalid_token", "This reset link is invalid or has expired. Request a new one.")
 	var userID, email string
 	err := s.db.InTx(r.Context(), func(tx *db.Tx) error {
 		var exp int64
 		err := tx.QueryRow(r.Context(), `SELECT pr.user_id, pr.expires_at, u.email FROM password_resets pr JOIN users u ON u.id = pr.user_id WHERE pr.id = ?`,
-			hashToken(strings.TrimSpace(req.Token))).Scan(&userID, &exp, &email)
+			hashToken(strings.TrimSpace(token))).Scan(&userID, &exp, &email)
 		if db.IsNoRows(err) || (err == nil && exp < nowMs()) {
 			return invalid
 		}
 		if err != nil {
 			return err
 		}
-		if err := SetPassword(r.Context(), tx, userID, req.Password, ""); err != nil {
+		if err := SetPassword(r.Context(), tx, userID, password, ""); err != nil {
 			return err
 		}
 		_, err = tx.Exec(r.Context(), `DELETE FROM password_resets WHERE user_id = ?`, userID)
 		return err
 	})
-	if err != nil {
-		s.writeErr(w, r, err)
-		return
+	if err == nil {
+		s.audit(r.Context(), r, userID, "password_reset", email, "all sessions signed out")
 	}
-	s.audit(r.Context(), r, userID, "password_reset", email, "all sessions signed out")
-	writeJSON(w, 200, map[string]bool{"ok": true})
+	return err
+}
+
+// handleResetPage is the password-reset page when the web app is turned off (API-only servers):
+// the link in the reset email must still work.
+func (s *Server) handleResetPage(w http.ResponseWriter, r *http.Request) {
+	d := &pageData{Title: "Choose a new password", Token: r.URL.Query().Get("token")}
+	if r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		d.Token = r.PostFormValue("token")
+		pw := r.PostFormValue("password")
+		if pw != r.PostFormValue("confirm") {
+			d.Error = "The passwords don't match."
+		} else if err := s.resetPassword(r, d.Token, pw); err != nil {
+			var ae *apiErr
+			d.Error = "Something went wrong. Please try again."
+			if errors.As(err, &ae) {
+				d.Error = ae.Message
+			}
+		} else {
+			s.messagePage(w, 200, "Password changed", "You were signed out everywhere. Sign in with your new password in the Ferry app.")
+			return
+		}
+	}
+	s.render(w, 200, "reset.html", d)
 }
 
 // ---------- sessions ----------

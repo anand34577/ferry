@@ -60,6 +60,12 @@ In **Send**, choose one of your signed-in devices instead of **Create a link**. 
 
 **History** lists transfers from all your devices: links, device-to-device transfers and uploads. Filter by sent, received or failed. Clearing history never deletes files.
 
+## Links and their files
+
+Each share link on **Links** lists the files and folders it contains. Click one to open it in **Files** — the file is scrolled into view and highlighted. Deleting a file removes it from its links; a link left with nothing in it is deleted too.
+
+**One-time and limited links:** each recipient can download each file once. If a download is interrupted they can resume it in the same browser (for 6 hours by default), but once a file has arrived completely, downloading it again is refused — the page shows it as *Downloaded*.
+
 ## Link analytics
 
 On **Links**, the chart icon (or **⋯ → Analytics**) shows how a link is used: how often it was opened, downloaded or previewed, files received, unique visitors, wrong password attempts, a day-by-day chart, browsers, where visitors came from, and a log of recent activity with time and IP address.

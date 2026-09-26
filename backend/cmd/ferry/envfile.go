@@ -10,6 +10,7 @@ const envExample = `# Ferry configuration. Every setting is optional; commented 
 # ---- Server ----
 # Address to listen on.
 # FERRY_ADDR=:8080
+# FERRY_WEB_APP=true            # false: API-only (apps, share and upload links keep working)
 # Public address, used in share links and emails. Set this when Ferry is reachable from the internet.
 # FERRY_PUBLIC_URL=https://files.example.com
 # Name shown in the web app and on share pages.

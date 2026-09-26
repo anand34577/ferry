@@ -395,3 +395,81 @@ func (r planReaderAt) ReadAt(b []byte, off int64) (int, error) {
 	}
 	return n, nil
 }
+
+// One-time links: a recipient can resume an interrupted download, but not download the file again.
+func TestOneTimeLinkDeliversOnce(t *testing.T) {
+	_, ts := newTestServer(t, nil)
+	adm := setupAdmin(t, ts)
+	data := bytes.Repeat([]byte("0123456789"), 5000)
+	fid, _ := adm.tusUpload("/api/v1/uploads", data, 1<<20, meta("filename", "once.bin"))
+	sh := adm.json("POST", "/api/v1/shares", map[string]any{"fileIds": []string{fid}, "maxDownloads": 1}, 201)
+	url := "/s/" + sh["token"].(string) + "/f/" + fid
+
+	bob := newClient(t, ts.URL)
+	resp, part := bob.do("GET", url, nil, map[string]string{"Range": "bytes=0-999"}) // interrupted after 1000 bytes
+	if resp.StatusCode != 206 || len(part) != 1000 {
+		t.Fatalf("first part: %d %d", resp.StatusCode, len(part))
+	}
+	resp, rest := bob.do("GET", url, nil, map[string]string{"Range": "bytes=1000-"}) // resume
+	if resp.StatusCode != 206 || !bytes.Equal(append(part, rest...), data) {
+		t.Fatalf("resume: %d", resp.StatusCode)
+	}
+	if resp, _ := bob.do("GET", url, nil, nil); resp.StatusCode != 410 { // the whole file again
+		t.Fatalf("second download allowed: %d", resp.StatusCode)
+	}
+	if resp, _ := newClient(t, ts.URL).do("GET", url, nil, nil); resp.StatusCode != 410 { // someone else
+		t.Fatalf("other browser allowed: %d", resp.StatusCode)
+	}
+	_, page := bob.do("GET", "/s/"+sh["token"].(string), nil, nil)
+	if !strings.Contains(string(page), "Downloaded") {
+		t.Fatal("page should mark the file as downloaded")
+	}
+}
+
+// Deleting the only file of a link deletes the link; links with other files keep them.
+func TestDeletingFilesRemovesEmptyLinks(t *testing.T) {
+	_, ts := newTestServer(t, nil)
+	adm := setupAdmin(t, ts)
+	a, _ := adm.tusUpload("/api/v1/uploads", []byte("a"), 16, meta("filename", "a.txt"))
+	b, _ := adm.tusUpload("/api/v1/uploads", []byte("b"), 16, meta("filename", "b.txt"))
+	only := adm.json("POST", "/api/v1/shares", map[string]any{"fileIds": []string{a}}, 201)["id"].(string)
+	both := adm.json("POST", "/api/v1/shares", map[string]any{"fileIds": []string{a, b}}, 201)["id"].(string)
+	adm.json("DELETE", "/api/v1/files/"+a, nil, 200)
+	adm.json("GET", "/api/v1/shares/"+only, nil, 404)
+	if it := adm.json("GET", "/api/v1/shares/"+both, nil, 200)["items"].([]any); len(it) != 1 {
+		t.Fatalf("remaining items: %v", it)
+	}
+	list := adm.json("GET", "/api/v1/shares", nil, 200)["shares"].([]any)
+	item := list[0].(map[string]any)["items"].([]any)[0].(map[string]any)
+	if item["name"] != "b.txt" || item["folderId"] != "" {
+		t.Fatalf("list items: %v", item)
+	}
+}
+
+// API-only servers: no web app, but the API, share pages and password reset page work.
+func TestAPIOnlyMode(t *testing.T) {
+	_, ts := newTestServer(t, func(c *config.Config) { c.WebApp = false })
+	adm := setupAdmin(t, ts)
+	if resp, _ := adm.do("GET", "/files", nil, nil); resp.StatusCode != 404 {
+		t.Fatalf("web app should be off: %d", resp.StatusCode)
+	}
+	if resp, body := adm.do("GET", "/reset?token=x", nil, nil); resp.StatusCode != 200 || !strings.Contains(string(body), "new password") {
+		t.Fatalf("reset page: %d", resp.StatusCode)
+	}
+	if info := adm.json("GET", "/api/v1/info", nil, 200); info["webApp"] != false {
+		t.Fatalf("info: %v", info["webApp"])
+	}
+}
+
+// A new server can't be claimed from the internet.
+func TestSetupOnlyFromLocalNetwork(t *testing.T) {
+	_, ts := newTestServer(t, func(c *config.Config) {
+		c.TrustedProxies = []*net.IPNet{{IP: net.IPv4(127, 0, 0, 1), Mask: net.CIDRMask(32, 32)}}
+	})
+	c := newClient(t, ts.URL)
+	resp, _ := c.do("POST", "/api/v1/setup", map[string]string{"email": "x@example.com", "password": "long-enough"}, map[string]string{"X-Forwarded-For": "8.8.8.8"})
+	if resp.StatusCode != 403 {
+		t.Fatalf("remote setup: %d", resp.StatusCode)
+	}
+	c.json("POST", "/api/v1/setup", map[string]string{"email": "x@example.com", "password": "long-enough"}, 200)
+}

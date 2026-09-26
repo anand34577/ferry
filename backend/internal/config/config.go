@@ -26,6 +26,7 @@ type Config struct {
 
 	AllowSignup   bool
 	PublicSharing bool
+	WebApp        bool // false: API-only server (apps, share pages and upload links keep working)
 	AdminEmail    string
 	AdminPassword string
 
@@ -119,6 +120,8 @@ func Load() (*Config, error) {
 	c.AllowSignup, err = boolEnv("FERRY_ALLOW_SIGNUP", false)
 	fail(err)
 	c.PublicSharing, err = boolEnv("FERRY_PUBLIC_SHARING", true)
+	fail(err)
+	c.WebApp, err = boolEnv("FERRY_WEB_APP", true)
 	fail(err)
 	c.MaxUploadBytes, err = sizeEnv("FERRY_MAX_UPLOAD_SIZE", 0)
 	fail(err)

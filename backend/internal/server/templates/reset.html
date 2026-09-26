@@ -1,0 +1,15 @@
+{{define "reset.html"}}{{template "head" .}}
+<section class="card narrow">
+  <div class="icon-lock" aria-hidden="true"></div>
+  <h1>Choose a new password</h1>
+  {{if .Error}}<p class="alert error" role="alert">{{.Error}}</p>{{end}}
+  <form method="post" action="/reset" class="stack">
+    <input type="hidden" name="token" value="{{.Token}}">
+    <label class="field"><span>New password</span>
+      <input type="password" name="password" required minlength="8" maxlength="72" autocomplete="new-password" autofocus></label>
+    <label class="field"><span>Repeat new password</span>
+      <input type="password" name="confirm" required minlength="8" maxlength="72" autocomplete="new-password"></label>
+    <button class="btn primary" type="submit">Change password</button>
+  </form>
+</section>
+{{template "foot" .}}{{end}}

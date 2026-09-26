@@ -629,6 +629,18 @@ func (s *Server) deleteItems(ctx context.Context, userID string, fileIDs, folder
 	if err != nil {
 		return err
 	}
+	// Links that include these items; the ones left with nothing to share are removed below.
+	affected := map[string]bool{}
+	for _, id := range append(append([]string{}, fileIDs...), allFolders...) {
+		if rows, err := s.db.Query(ctx, `SELECT share_id FROM share_items WHERE item_id = ?`, id); err == nil {
+			for rows.Next() {
+				var sid string
+				rows.Scan(&sid)
+				affected[sid] = true
+			}
+			rows.Close()
+		}
+	}
 	err = s.db.InTx(ctx, func(tx *db.Tx) error {
 		for _, f := range files {
 			if _, err := tx.Exec(ctx, `DELETE FROM files WHERE id = ? AND user_id = ?`, f.ID, userID); err != nil {
@@ -655,6 +667,17 @@ func (s *Server) deleteItems(ctx context.Context, userID string, fileIDs, folder
 		s.streams.cancel(f.ID)
 		if err := s.store.Remove("blobs/" + f.Blob); err != nil {
 			s.log.Warn("blob removal deferred to cleanup", "blob", f.Blob, "err", err)
+		}
+	}
+	for sid := range affected {
+		var left int
+		s.db.QueryRow(ctx, `SELECT COUNT(*) FROM share_items WHERE share_id = ?`, sid).Scan(&left)
+		if left > 0 {
+			continue
+		}
+		sh, err := scanShare(s.db.QueryRow(ctx, `SELECT `+shareCols+` FROM shares s WHERE s.id = ? AND s.kind = 'download'`, sid))
+		if err == nil && s.deleteShare(ctx, sh) == nil {
+			s.audit(ctx, nil, sh.UserID, "share_deleted", sh.ID, sh.Name+" (its files were deleted)")
 		}
 	}
 	return nil

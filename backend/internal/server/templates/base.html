@@ -28,7 +28,7 @@
   <div class="icon-lock" aria-hidden="true"></div>
   <h1>Sign in required</h1>
   <p class="muted">The owner only allows people with an account on this server to open this link.</p>
-  <a class="btn primary" href="/login?next={{if eq .Share.Kind "upload"}}/u/{{else}}/s/{{end}}{{.Token}}">Sign in</a>
+  {{if .WebApp}}<a class="btn primary" href="/login?next={{if eq .Share.Kind "upload"}}/u/{{else}}/s/{{end}}{{.Token}}">Sign in</a>{{end}}
 </section>
 {{else if .Locked}}
 <section class="card narrow">
