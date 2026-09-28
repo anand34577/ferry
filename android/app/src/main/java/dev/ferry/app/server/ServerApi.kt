@@ -43,9 +43,16 @@ class ServerApi(baseUrl: String, private val token: String?) {
         /** Normalises what a user typed ("myserver:8080") into a URL. */
         fun normalizeUrl(input: String): String {
             var u = input.trim().trimEnd('/')
-            if (!u.startsWith("http://") && !u.startsWith("https://")) u = "https://$u"
+            u = when {
+                u.startsWith("http://", true) -> "http://" + u.substring(7)
+                u.startsWith("https://", true) -> "https://" + u.substring(8)
+                else -> "https://$u"
+            }
             return u
         }
+
+        /** True when the user typed the scheme themselves (then there is no http fallback). */
+        fun hasScheme(input: String) = input.trim().let { it.startsWith("http://", true) || it.startsWith("https://", true) }
     }
 
     suspend fun <T> call(block: ServerApi.() -> T): T = withContext(Dispatchers.IO) { block() }

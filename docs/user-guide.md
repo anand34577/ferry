@@ -75,7 +75,7 @@ On **Links**, the chart icon (or **⋯ → Analytics**) shows how a link is used
 Turn on **Notify me when someone downloads** (share links) or **Notify me when files arrive** (upload links) when creating or editing a link. You get at most one notification per link every 10 minutes:
 
 - by **email**, when the server has email set up, and
-- as a **push message through Gotify**: in **Settings → Notifications**, enter your Gotify server address and an application token (in Gotify: *Apps → Create application*), save, and use **Send test**.
+- as a **push message through Gotify**: in **Settings → Notifications**, enter your Gotify server address and an application token (in Gotify: *Apps → Create application*), save, and use **Send test**. Both `https://` and plain `http://` addresses work (e.g. a Gotify on your home network); for your own server with a self-signed certificate, turn on **Accept self-signed certificate**. If the test fails, the message says why (untrusted certificate, wrong token, redirect to another address, …).
 
 ## Short links
 

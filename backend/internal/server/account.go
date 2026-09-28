@@ -122,6 +122,7 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Password string `json:"password"`
+		Code     string `json:"code"` // accounts without a password (single sign-on) confirm with a current code
 	}
 	if err := readJSON(r, &req); err != nil {
 		s.writeErr(w, r, err)
@@ -132,12 +133,18 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, errf(429, "rate_limited", "Too many attempts. Please try again later."))
 		return
 	}
-	var hash string
-	if err := s.db.QueryRow(r.Context(), `SELECT password_hash FROM users WHERE id = ?`, u.ID).Scan(&hash); err != nil {
+	var hash, secret string
+	var lastStep int64
+	if err := s.db.QueryRow(r.Context(), `SELECT password_hash, totp_secret, totp_last_step FROM users WHERE id = ?`, u.ID).Scan(&hash, &secret, &lastStep); err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	if !checkPassword(hash, req.Password) {
+	if hash == "" {
+		if !s.useTOTP(r.Context(), u.ID, secret, req.Code, lastStep) {
+			s.writeErr(w, r, errf(400, "invalid_code", "That code is incorrect or was already used. Try the next code."))
+			return
+		}
+	} else if !checkPassword(hash, req.Password) {
 		s.writeErr(w, r, errf(400, "wrong_password", "Your password is incorrect."))
 		return
 	}

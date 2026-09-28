@@ -85,9 +85,10 @@ Clients should send `X-Ferry-Client: <platform>/<version> api=1`; an outdated cl
 | `GET /me/identities`, `DELETE /me/identities/{id}` | connected SSO accounts (can't remove the last sign-in method) |
 | `POST /auth/return` | end an admin's "sign in as" session and restore the admin session |
 | `POST /auth/forgot`, `POST /auth/reset` | `{email}` → emails a one-hour, single-use link (same answer whether or not the account exists); `{token,password}` → new password, all sessions signed out. Needs SMTP **and** `FERRY_PUBLIC_URL` (capability `password-reset`) |
-| `GET/PATCH /me`, `POST /me/password`, `GET /me/usage` | profile (`name`, `gotifyUrl`, `gotifyToken`, `prefs` — merged, `null` removes a key; `GET` also returns `hasPassword`, `gotifyConfigured`, `impersonator`, `prefs`), password (signs out other sessions; `current` not needed when the account has none), quota usage |
+| `GET/PATCH /me`, `POST /me/password`, `GET /me/usage` | profile (`name`, `gotifyUrl`, `gotifyToken`, `gotifySkipVerify`, `prefs` — merged, `null` removes a key; `GET` also returns `hasPassword`, `gotifyConfigured`, `impersonator`, `prefs`), password (signs out other sessions; `current` not needed when the account has none), quota usage |
 | `POST /me/gotify/test` | send a test push to the user's Gotify |
-| `POST /me/totp/setup\|enable\|disable` | two-factor sign-in: setup → `{secret, uri}` (otpauth QR); enable `{code}`; disable `{password}` |
+| `POST /admin/test-sso` | admin: run OIDC discovery with the saved settings; returns `issuer`, `authUrl`, `redirectUri`, `warning` |
+| `POST /me/totp/setup\|enable\|disable` | two-factor sign-in: setup → `{secret, uri}` (otpauth QR); enable `{code}`; disable `{password}` (accounts without a password: `{code}`) |
 | `GET /me/sessions`, `DELETE /me/sessions/{id}`, `POST /me/sessions/revoke-others` | where the account is signed in; sign out one or all others |
 | `GET /files?folder=&q=&sort=name\|size\|date&order=` | folder listing or search |
 | `POST /files/check` | `{folderId,names}` → name conflicts |

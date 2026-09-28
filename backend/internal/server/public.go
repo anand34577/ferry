@@ -632,7 +632,7 @@ func (s *Server) handleUploadPost(w http.ResponseWriter, r *http.Request) {
 		}
 		if part.FormName() == "uploader" { // the form puts this field before the files
 			b, _ := io.ReadAll(io.LimitReader(part, 100))
-			uploader = strings.TrimSpace(string(b))
+			uploader = strings.TrimSpace(strings.ToValidUTF8(string(b), ""))
 			continue
 		}
 		if part.FormName() != "files" || part.FileName() == "" {

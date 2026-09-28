@@ -192,7 +192,7 @@ func (s *Server) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(t.Peer) > 200 {
-		t.Peer = t.Peer[:200]
+		t.Peer = clip(t.Peer, 200)
 	}
 	if len(t.Error) > 500 {
 		t.Error = t.Error[:500]

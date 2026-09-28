@@ -241,9 +241,8 @@ func normalizeTypes(s string) string {
 func (s *Server) applyShareReq(ctx context.Context, u *User, sh *Share, req *shareReq, creating bool) error {
 	now := nowMs()
 	if req.Name != nil {
-		sh.Name = strings.TrimSpace(*req.Name)
-		if len(sh.Name) > 200 {
-			sh.Name = sh.Name[:200]
+		if n := clip(strings.TrimSpace(*req.Name), 200); n != "" { // an empty name keeps the current or default one
+			sh.Name = n
 		}
 	}
 	if req.Message != nil {
@@ -627,6 +626,10 @@ func (s *Server) handleEmailShare(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	if sh.Status != "active" {
+		s.writeErr(w, r, errf(409, "share_inactive", "This link is "+sh.Status+", so the recipient couldn't open it. Change its settings first."))
+		return
+	}
 	link := s.shareURL(r, sh)
 	if sh.ShortURL != "" {
 		link = sh.ShortURL
@@ -642,7 +645,11 @@ func (s *Server) handleEmailShare(w http.ResponseWriter, r *http.Request) {
 	if sh.HasPassword {
 		body += "\nThis link is password protected; the sender will give you the password separately.\n"
 	}
-	if err := s.mail(to, u.Name+" shared files with you", body); err != nil {
+	subject := u.Name + " shared \"" + sh.Name + "\" with you"
+	if sh.Kind == "upload" {
+		subject = u.Name + " asked you to upload files"
+	}
+	if err := s.mail(to, subject, body); err != nil {
 		s.log.Error("send share email", "err", err)
 		s.writeErr(w, r, errf(502, "email_failed", "The email could not be sent. Check the server's email settings."))
 		return

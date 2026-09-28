@@ -203,7 +203,7 @@ func (s *Server) tusCreate(w http.ResponseWriter, r *http.Request, owner *User, 
 		up.FolderID = share.FolderID
 		up.Uploader = strings.TrimSpace(meta["uploader"])
 		if len(up.Uploader) > 100 {
-			up.Uploader = up.Uploader[:100]
+			up.Uploader = clip(up.Uploader, 100)
 		}
 		up.UploaderKey = s.uploaderKey(w, r, share)
 		if err := s.checkLinkLimits(ctx, share, name, size); err != nil {
@@ -637,6 +637,16 @@ func (s *Server) finalizeUpload(ctx context.Context, up *upload, owner *User, sh
 	var oldBlob string
 	skipped := false
 	err = s.db.InTx(ctx, func(tx *db.Tx) error {
+		// The destination folder may have been deleted while the upload ran (or an upload link's folder
+		// later); the file then lands in My files instead of an invisible, orphaned folder.
+		if f.FolderID != "" {
+			var x string
+			if err := tx.QueryRow(ctx, `SELECT id FROM folders WHERE id = ? AND user_id = ?`, f.FolderID, owner.ID).Scan(&x); db.IsNoRows(err) {
+				f.FolderID = ""
+			} else if err != nil {
+				return err
+			}
+		}
 		existing, err := scanFile(tx.QueryRow(ctx, `SELECT `+fileCols+` FROM files WHERE user_id = ? AND folder_id = ? AND transfer_id = ? AND name = ?`,
 			owner.ID, f.FolderID, f.TransferID, f.Name))
 		if err != nil && !db.IsNoRows(err) {

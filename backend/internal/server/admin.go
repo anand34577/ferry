@@ -398,7 +398,7 @@ func (s *Server) handleAdminSignOutUser(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleAdminTestEmail(w http.ResponseWriter, r *http.Request) {
 	u := userOf(r)
 	if s.conf().SMTPHost == "" {
-		s.writeErr(w, r, errf(400, "email_disabled", "Email is not configured. Set FERRY_SMTP_HOST and restart."))
+		s.writeErr(w, r, errf(400, "email_disabled", "Email is not configured. Enter a mail server under Admin → Settings → Email."))
 		return
 	}
 	if err := s.mail(u.Email, s.conf().SiteName+" test email", "Email delivery from "+s.conf().SiteName+" works.\n"); err != nil {

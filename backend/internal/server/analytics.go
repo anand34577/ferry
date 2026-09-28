@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ---------- link analytics ----------
@@ -23,11 +24,15 @@ func (s *Server) linkEvent(ctx context.Context, r *http.Request, sh *Share, kind
 	}
 }
 
+// clip shortens s to at most n bytes without splitting a UTF-8 character.
 func clip(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
+	if len(s) <= n {
+		return s
 	}
-	return s
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // firstRange is true for a request that starts reading a file; players and download managers send

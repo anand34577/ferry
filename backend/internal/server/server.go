@@ -217,6 +217,7 @@ func (s *Server) routes() {
 	adm("POST /api/v1/admin/shares/{id}/revoke", s.handleAdminRevokeShare)
 	adm("DELETE /api/v1/admin/shares/{id}", s.handleAdminDeleteShare)
 	adm("POST /api/v1/admin/test-email", s.handleAdminTestEmail)
+	adm("POST /api/v1/admin/test-sso", s.handleAdminTestSSO)
 	adm("GET /api/v1/admin/settings", s.handleAdminSettings)
 	adm("PATCH /api/v1/admin/settings", s.handleAdminSaveSettings)
 	adm("GET /api/v1/admin/devices", s.handleAdminDevices)

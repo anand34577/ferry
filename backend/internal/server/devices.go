@@ -152,7 +152,7 @@ func (s *Server) handlePresence(w http.ResponseWriter, r *http.Request) {
 	}
 	var addrs []string
 	for _, a := range req.Addrs {
-		if ip := net.ParseIP(strings.TrimSpace(a)); ip != nil && (ip.IsPrivate() || ip.IsLinkLocalUnicast()) && len(addrs) < 8 {
+		if ip := net.ParseIP(strings.TrimSpace(a)); ip != nil && (ip.IsPrivate() || ip.IsLinkLocalUnicast() || cgnat.Contains(ip)) && len(addrs) < 8 {
 			addrs = append(addrs, ip.String())
 		}
 	}

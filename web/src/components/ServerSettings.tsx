@@ -72,6 +72,18 @@ export function ServerSettings() {
     }
   };
 
+  // Tests use the saved settings; the SMTP one can take a while against a slow mail server.
+  const test = async <T,>(key: string, path: string, msg: (r: T) => string) => {
+    setBusy(key);
+    try {
+      toast.ok(msg(await post<T>(path)));
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="settings-groups">
       <p className="muted small">
@@ -85,8 +97,23 @@ export function ServerSettings() {
             <header className="panel-head">
               <h2>{title}</h2>
               {group === "email" && data.settings.find((s) => s.key === "smtp_host")?.value && (
-                <button className="btn sm" onClick={() => post("/api/v1/admin/test-email").then(() => toast.ok("Test email sent to your address")).catch(toast.error)}>
-                  <Icon name="mail" size={16} /> Send test email
+                <button
+                  className="btn sm"
+                  disabled={busy === "test-email" || changed.length > 0}
+                  title={changed.length ? "Save your changes first" : undefined}
+                  onClick={() => test("test-email", "/api/v1/admin/test-email", () => "Test email sent to your address — check the inbox (and spam folder)")}
+                >
+                  <Icon name="mail" size={16} /> {busy === "test-email" ? "Sending…" : "Send test email"}
+                </button>
+              )}
+              {group === "sso" && data.settings.find((s) => s.key === "oidc_issuer")?.value && (
+                <button
+                  className="btn sm"
+                  disabled={busy === "test-sso" || changed.length > 0}
+                  title={changed.length ? "Save your changes first" : undefined}
+                  onClick={() => test("test-sso", "/api/v1/admin/test-sso", (r: { warning?: string }) => (r.warning ? "Provider reachable. " + r.warning : "Provider reachable and configured correctly"))}
+                >
+                  <Icon name="shield" size={16} /> {busy === "test-sso" ? "Testing…" : "Test connection"}
                 </button>
               )}
             </header>
