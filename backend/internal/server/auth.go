@@ -100,7 +100,7 @@ func CreateUser(ctx context.Context, q db.Q, email, name, password, role string)
 		name = strings.Split(email, "@")[0]
 	}
 	if len(name) > 100 {
-		name = name[:100]
+		name = clip(name, 100)
 	}
 	h, err := hashPassword(password)
 	if err != nil {
@@ -288,7 +288,7 @@ type loginReq struct {
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	// On a fresh server the first visitor becomes the administrator. Only accept that from the local
 	// network, so a server that is already reachable from the internet can't be claimed by a stranger.
-	if ip := net.ParseIP(s.clientIP(r)); ip == nil || !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
+	if !s.fromLocalNetwork(r) {
 		s.writeErr(w, r, errf(403, "setup_local_only", "For security, the first administrator account can only be created from the local network (or set FERRY_ADMIN_EMAIL and FERRY_ADMIN_PASSWORD)."))
 		return
 	}
@@ -316,6 +316,42 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r.Context(), r, u.ID, "setup", u.Email, "initial admin created")
 	s.startSession(w, r, u, &req)
+}
+
+// fromLocalNetwork reports whether the visitor is on the server's own network. Behind a reverse proxy or
+// tunnel that isn't listed in FERRY_TRUSTED_PROXIES the connection itself looks local, so every address
+// the proxy forwarded must be local too; a proxy appends the real client, which can't be forged away.
+func (s *Server) fromLocalNetwork(r *http.Request) bool {
+	local := func(v string) bool {
+		ip := net.ParseIP(strings.TrimSpace(v))
+		return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
+	}
+	if !local(s.clientIP(r)) {
+		return false
+	}
+	var forwarded []string
+	for _, h := range []string{"X-Forwarded-For", "X-Real-Ip", "Cf-Connecting-Ip", "True-Client-Ip"} {
+		for _, v := range r.Header.Values(h) {
+			forwarded = append(forwarded, strings.Split(v, ",")...)
+		}
+	}
+	for _, v := range r.Header.Values("Forwarded") { // RFC 7239: for=1.2.3.4;proto=https, for="[2001:db8::1]:443"
+		for _, part := range strings.FieldsFunc(v, func(c rune) bool { return c == ',' || c == ';' }) {
+			if k, f, _ := strings.Cut(strings.TrimSpace(part), "="); strings.EqualFold(k, "for") {
+				f = strings.Trim(f, `"`)
+				if h, _, err := net.SplitHostPort(f); err == nil {
+					f = h
+				}
+				forwarded = append(forwarded, strings.Trim(f, "[]"))
+			}
+		}
+	}
+	for _, v := range forwarded {
+		if strings.TrimSpace(v) != "" && !local(v) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
@@ -485,12 +521,15 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	a := authOf(r)
-	var gURL, gTok string
-	s.db.QueryRow(r.Context(), `SELECT gotify_url, gotify_token FROM users WHERE id = ?`, a.user.ID).Scan(&gURL, &gTok)
-	var pwHash, prefs string
-	s.db.QueryRow(r.Context(), `SELECT password_hash, prefs FROM users WHERE id = ?`, a.user.ID).Scan(&pwHash, &prefs)
-	resp := map[string]any{"user": a.user, "deviceId": a.deviceID, "gotifyUrl": gURL, "gotifyConfigured": gURL != "" && gTok != "", "hasPassword": pwHash != "",
-		"prefs": json.RawMessage(firstNonEmpty(prefs, "{}"))}
+	var gURL, gTok, pwHash, prefs string
+	var gInsecure int
+	s.db.QueryRow(r.Context(), `SELECT gotify_url, gotify_token, gotify_skip_verify, password_hash, prefs FROM users WHERE id = ?`, a.user.ID).
+		Scan(&gURL, &gTok, &gInsecure, &pwHash, &prefs)
+	if !json.Valid([]byte(prefs)) {
+		prefs = "{}"
+	}
+	resp := map[string]any{"user": a.user, "deviceId": a.deviceID, "gotifyUrl": gURL, "gotifyConfigured": gURL != "" && gTok != "",
+		"gotifySkipVerify": gInsecure == 1, "hasPassword": pwHash != "", "prefs": json.RawMessage(prefs)}
 	if c, err := r.Cookie(adminReturnCookie); err == nil {
 		if adm, err := s.authToken(r.Context(), c.Value, true); err == nil && adm.user.Role == "admin" {
 			resp["impersonator"] = adm.user.Email
@@ -501,9 +540,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name        *string `json:"name"`
-		GotifyURL   *string `json:"gotifyUrl"`
-		GotifyToken *string `json:"gotifyToken"`
+		Name             *string `json:"name"`
+		GotifyURL        *string `json:"gotifyUrl"`
+		GotifyToken      *string `json:"gotifyToken"`
+		GotifySkipVerify *bool   `json:"gotifySkipVerify"`
 		// Prefs are merged into the saved ones (theme, sort order, …) so every browser looks the same.
 		Prefs map[string]json.RawMessage `json:"prefs"`
 	}
@@ -564,6 +604,10 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 			if req.GotifyToken != nil && gURL != "" {
 				tok = strings.TrimSpace(*req.GotifyToken)
 			}
+			if len(tok) > 200 || strings.ContainsAny(tok, " \t\r\n") {
+				s.writeErr(w, r, errf(400, "invalid_token", "That doesn't look like a Gotify application token."))
+				return
+			}
 			q, args = `UPDATE users SET gotify_url = ?, gotify_token = ? WHERE id = ?`, []any{gURL, tok, u.ID}
 		}
 		if _, err := s.db.Exec(ctx, q, args...); err != nil {
@@ -571,6 +615,12 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.audit(ctx, r, u.ID, "gotify_updated", "", gURL)
+	}
+	if req.GotifySkipVerify != nil {
+		if _, err := s.db.Exec(ctx, `UPDATE users SET gotify_skip_verify = ? WHERE id = ?`, boolInt(*req.GotifySkipVerify), u.ID); err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
 	}
 	writeJSON(w, 200, map[string]any{"user": u})
 }

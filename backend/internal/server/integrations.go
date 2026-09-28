@@ -5,6 +5,8 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,47 +21,84 @@ import (
 
 var outbound = &http.Client{Timeout: 10 * time.Second}
 
-// publicOnly refuses connections to loopback, private and link-local addresses. The check runs on
-// the resolved IP at connect time, so DNS tricks can't point it at the local network.
-var publicOnly = &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
-	Proxy: nil,
-	DialContext: (&net.Dialer{Timeout: 10 * time.Second, Control: func(_, address string, _ syscall.RawConn) error {
-		host, _, _ := net.SplitHostPort(address)
-		ip := net.ParseIP(host)
-		if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-			return errors.New("addresses on the server's own network aren't allowed")
+var errLocalNetwork = errors.New("addresses on the server's own network aren't allowed")
+
+// cgnat is 100.64.0.0/10 (carrier-grade NAT, also Tailscale), which net.IP.IsPrivate doesn't cover.
+var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+func localIP(ip net.IP) bool {
+	return ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified() || ip.IsMulticast() || cgnat.Contains(ip)
+}
+
+// gotifyClients[public][insecure]: public refuses connections to loopback, private and link-local
+// addresses (checked on the resolved IP at connect time, so DNS tricks can't point it at the local
+// network); insecure accepts a self-signed certificate. Redirects are not followed: a POST that is
+// redirected (typically http → https) would arrive as a GET and be lost.
+var gotifyClients = func() (c [2][2]*http.Client) {
+	for pub := 0; pub < 2; pub++ {
+		for ins := 0; ins < 2; ins++ {
+			d := &net.Dialer{Timeout: 10 * time.Second}
+			if pub == 1 {
+				d.Control = func(_, address string, _ syscall.RawConn) error {
+					host, _, _ := net.SplitHostPort(address)
+					if localIP(net.ParseIP(host)) {
+						return errLocalNetwork
+					}
+					return nil
+				}
+			}
+			t := &http.Transport{DialContext: d.DialContext, TLSHandshakeTimeout: 10 * time.Second, ForceAttemptHTTP2: true}
+			if pub == 0 {
+				t.Proxy = http.ProxyFromEnvironment
+			}
+			if ins == 1 {
+				t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // the user's opt-in for their own Gotify
+			}
+			c[pub][ins] = &http.Client{Timeout: 15 * time.Second, Transport: t,
+				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		}
-		return nil
-	}}).DialContext,
-}}
+	}
+	return
+}()
 
 // openServer reports whether strangers can get an account (sign-up or SSO auto-create).
 func (s *Server) openServer() bool { return s.conf().AllowSignup || s.conf().OIDC.AutoCreate }
 
 // ---------- Gotify ----------
 
+// cleanGotifyURL accepts the server address, also when pasted as ".../message?token=…" from Gotify's docs.
 func cleanGotifyURL(v string) (string, error) {
-	v = strings.TrimRight(strings.TrimSpace(v), "/")
+	v = strings.TrimSpace(v)
 	if v == "" {
 		return "", nil
 	}
+	if !strings.Contains(v, "://") {
+		v = "https://" + v
+	}
 	u, err := url.Parse(v)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
 		return "", errf(400, "invalid_url", "Enter the Gotify server address, e.g. https://gotify.example.com")
 	}
-	return v, nil
+	u.RawQuery, u.Fragment, u.RawPath = "", "", ""
+	u.Path = strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/message")
+	u.Scheme = strings.ToLower(u.Scheme)
+	return strings.TrimRight(u.String(), "/"), nil
 }
 
 // gotify pushes a message to the user's own Gotify server; a no-op when they haven't set one up.
+// Errors are written for the person who configured it.
 func (s *Server) gotify(ctx context.Context, userID, title, message string) error {
 	var gURL, tok, role string
-	if err := s.db.QueryRow(ctx, `SELECT gotify_url, gotify_token, role FROM users WHERE id = ?`, userID).Scan(&gURL, &tok, &role); err != nil || gURL == "" || tok == "" {
+	var insecure int
+	if err := s.db.QueryRow(ctx, `SELECT gotify_url, gotify_token, gotify_skip_verify, role FROM users WHERE id = ?`, userID).Scan(&gURL, &tok, &insecure, &role); err != nil || gURL == "" || tok == "" {
 		return err
 	}
-	client := outbound
+	pub := 0
 	if s.openServer() && role != "admin" {
-		client = publicOnly // on open servers, users can't make the server reach its local network
+		pub = 1 // on open servers, users can't make the server reach its local network
 	}
+	client := gotifyClients[pub][min(insecure, 1)]
 	body, _ := json.Marshal(map[string]any{"title": title, "message": message, "priority": 5})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gURL+"/message", bytes.NewReader(body))
 	if err != nil {
@@ -69,11 +108,42 @@ func (s *Server) gotify(ctx context.Context, userID, title, message string) erro
 	req.Header.Set("X-Gotify-Key", tok)
 	res, err := client.Do(req)
 	if err != nil {
-		return err
+		var cv *tls.CertificateVerificationError
+		var ua x509.UnknownAuthorityError
+		var he x509.HostnameError
+		var rh tls.RecordHeaderError
+		switch {
+		case errors.Is(err, errLocalNetwork):
+			return errors.New("this server only sends notifications to Gotify servers on the internet (ask an administrator)")
+		case errors.As(err, &cv) || errors.As(err, &ua) || errors.As(err, &he):
+			return errors.New("its certificate isn't trusted — turn on \"Accept self-signed certificate\" if it is your own server")
+		case errors.As(err, &rh):
+			return errors.New("it doesn't speak HTTPS on that address — try http:// instead")
+		}
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return errors.New("no answer within 15 seconds — check the address and that this server can reach it")
+		}
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err // "Post "https://…": " adds nothing the user doesn't know
+		}
+		return fmt.Errorf("couldn't connect: %w", err)
 	}
 	defer res.Body.Close()
-	if res.StatusCode >= 300 {
-		return fmt.Errorf("gotify answered %d %s", res.StatusCode, http.StatusText(res.StatusCode))
+	io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
+	switch {
+	case res.StatusCode >= 300 && res.StatusCode < 400:
+		if loc, err := res.Location(); err == nil {
+			return fmt.Errorf("it redirects to %s — save that address instead", strings.TrimSuffix(loc.String(), "/message"))
+		}
+		return fmt.Errorf("it answered with a redirect (%d)", res.StatusCode)
+	case res.StatusCode == 401 || res.StatusCode == 403:
+		return errors.New("the application token was rejected — create an application in Gotify and paste its token (not a client token)")
+	case res.StatusCode == 404 || res.StatusCode == 405:
+		return fmt.Errorf("%s doesn't look like a Gotify server (%d)", gURL, res.StatusCode)
+	case res.StatusCode >= 300:
+		return fmt.Errorf("Gotify answered %d %s", res.StatusCode, http.StatusText(res.StatusCode))
 	}
 	return nil
 }
@@ -91,7 +161,7 @@ func (s *Server) handleGotifyTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.gotify(r.Context(), u.ID, s.conf().SiteName+" test", "Notifications from "+s.conf().SiteName+" are working."); err != nil {
-		s.writeErr(w, r, errf(502, "gotify_failed", "Gotify didn't accept the message: "+err.Error()))
+		s.writeErr(w, r, errf(502, "gotify_failed", "The test message wasn't delivered: "+err.Error()+"."))
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})

@@ -43,7 +43,7 @@ function SignIn({ mode }: { mode: "login" | "setup" }) {
   const isSetup = mode === "setup" || setupNeeded;
   const next = params.get("next");
   // Only same-site relative paths are followed (no open redirects).
-  const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
+  const safeNext = next && next.startsWith("/") && !next.startsWith("//") && !/[\\\t\r\n]/.test(next) ? next : "/";
 
   const go = () => {
     if (safeNext.startsWith("/s/") || safeNext.startsWith("/u/")) window.location.replace(safeNext);

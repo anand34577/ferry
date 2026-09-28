@@ -3,11 +3,16 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"mime"
+	"mime/quotedprintable"
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +23,8 @@ import (
 // RunCleanup runs Cleanup every interval until ctx ends. Every step is idempotent.
 func (s *Server) RunCleanup(ctx context.Context) {
 	s.Cleanup(ctx)
-	t := time.NewTicker(s.conf().CleanupInterval)
+	t := time.NewTicker(max(s.conf().CleanupInterval, time.Minute)) // 0 would panic
+
 	defer t.Stop()
 	for {
 		select {
@@ -187,16 +193,36 @@ func (s *Server) sendMail(to, subject, body string) error {
 	if from == "" {
 		from = c.SMTPUser
 	}
+	// "Name <addr>" is accepted for the sender; the envelope needs the bare address.
+	if a, err := mail.ParseAddress(from); err == nil {
+		from = a.Address
+	}
+	if from == "" || strings.ContainsAny(from, "\r\n<>") {
+		return fmt.Errorf("no sender address: set the email sender address (FERRY_SMTP_FROM), e.g. ferry@example.com")
+	}
+	if strings.ContainsAny(to, "\r\n") {
+		return fmt.Errorf("invalid recipient")
+	}
+	helo := heloName(c.PublicURL)
+	domain := helo
+	if _, d, ok := strings.Cut(from, "@"); ok && d != "" {
+		domain = d
+	}
 	// Names and subjects are user-controlled: fold all whitespace (incl. CR/LF) and RFC 2047-encode them.
 	subject = mime.QEncoding.Encode("utf-8", strings.Join(strings.Fields(subject), " "))
 	sender := (&mail.Address{Name: strings.Join(strings.Fields(c.SiteName), " "), Address: from}).String()
+	var qp strings.Builder
+	qw := quotedprintable.NewWriter(&qp) // safe for any relay: 7-bit, short lines
+	qw.Write([]byte(strings.ReplaceAll(body, "\n", "\r\n")))
+	qw.Close()
 	msg := "From: " + sender + "\r\nTo: " + to + "\r\nSubject: " + subject +
-		"\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\n" + body
+		"\r\nMessage-ID: <" + newID() + "@" + domain + ">\r\nDate: " + time.Now().Format(time.RFC1123Z) +
+		"\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n" + qp.String()
 	addr := net.JoinHostPort(c.SMTPHost, strconv.Itoa(c.SMTPPort))
 	tlsCfg := &tls.Config{ServerName: c.SMTPHost, InsecureSkipVerify: c.SMTPSkipVerify} //nolint:gosec // opt-in via FERRY_SMTP_SKIP_VERIFY
 	implicitTLS := c.SMTPSecurity == "tls" || (c.SMTPSecurity == "auto" && c.SMTPPort == 465)
 	// Explicit dial + deadline: smtp.SendMail has no timeout and would hang forever on a stuck server.
-	d := &net.Dialer{Timeout: 30 * time.Second}
+	d := &net.Dialer{Timeout: 20 * time.Second}
 	var conn net.Conn
 	var err error
 	if implicitTLS {
@@ -205,38 +231,51 @@ func (s *Server) sendMail(to, subject, body string) error {
 		conn, err = d.Dial("tcp", addr)
 	}
 	if err != nil {
-		return err
+		return smtpHint("connect to "+addr, err, implicitTLS)
 	}
 	conn.SetDeadline(time.Now().Add(2 * time.Minute))
 	cl, err := smtp.NewClient(conn, c.SMTPHost)
 	if err != nil {
 		conn.Close()
-		return err
+		if !implicitTLS && c.SMTPPort == 465 {
+			return fmt.Errorf("no answer from %s: port 465 needs connection security \"tls\"", addr)
+		}
+		return smtpHint("greeting from "+addr, err, implicitTLS)
 	}
 	defer cl.Close()
+	// Some servers reject "localhost" in EHLO; announce the public host name when there is one.
+	if err := cl.Hello(helo); err != nil {
+		return fmt.Errorf("EHLO rejected: %w", err)
+	}
 	if !implicitTLS && c.SMTPSecurity != "none" {
 		ok, _ := cl.Extension("STARTTLS")
 		if !ok && c.SMTPSecurity == "starttls" {
-			return fmt.Errorf("smtp server does not offer STARTTLS (set FERRY_SMTP_SECURITY=none for a plain relay)")
+			return fmt.Errorf("the mail server does not offer STARTTLS (use connection security \"none\" for a plain relay, or \"tls\" for port 465)")
 		}
 		if ok {
 			if err := cl.StartTLS(tlsCfg); err != nil {
-				return err
+				return smtpHint("STARTTLS", err, true)
 			}
 		}
 	}
+	hint := ""
 	if c.SMTPUser != "" {
 		if ok, _ := cl.Extension("AUTH"); ok {
 			if err := cl.Auth(smtpAuth(cl, c.SMTPUser, c.SMTPPass, c.SMTPHost)); err != nil {
-				return err
+				return fmt.Errorf("sign-in rejected (check username and password; Gmail and Outlook need an app password): %w", err)
 			}
+		} else if _, isTLS := cl.TLSConnectionState(); !isTLS {
+			// Relays that trust the sender's IP don't offer AUTH; others only offer it after STARTTLS.
+			hint = " (the server didn't offer sign-in on this unencrypted connection; try connection security \"auto\" or \"starttls\")"
+		} else {
+			hint = " (the server didn't offer sign-in, so none was attempted)"
 		}
 	}
 	if err := cl.Mail(from); err != nil {
-		return err
+		return fmt.Errorf("sender %s rejected%s: %w", from, hint, err)
 	}
 	if err := cl.Rcpt(to); err != nil {
-		return err
+		return fmt.Errorf("recipient %s rejected%s: %w", to, hint, err)
 	}
 	wc, err := cl.Data()
 	if err != nil {
@@ -249,6 +288,36 @@ func (s *Server) sendMail(to, subject, body string) error {
 		return err
 	}
 	return cl.Quit()
+}
+
+// heloName is the host name announced to the mail server.
+func heloName(publicURL string) string {
+	if u, err := url.Parse(publicURL); err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	if h, err := os.Hostname(); err == nil && h != "" && !strings.ContainsAny(h, " _") {
+		return h
+	}
+	return "localhost"
+}
+
+// smtpHint adds the likely fix to common connection and TLS failures.
+func smtpHint(step string, err error, tlsUsed bool) error {
+	var cv *tls.CertificateVerificationError
+	var he x509.HostnameError
+	var ua x509.UnknownAuthorityError
+	var rh tls.RecordHeaderError
+	switch {
+	case errors.As(err, &cv) || errors.As(err, &he) || errors.As(err, &ua):
+		return fmt.Errorf("%s: the mail server's certificate isn't trusted (turn on \"Accept self-signed certificates\" if it is your own server): %w", step, err)
+	case errors.As(err, &rh) && tlsUsed:
+		return fmt.Errorf("%s: the server doesn't speak TLS on this port (use connection security \"starttls\" or \"auto\" for port 587/25): %w", step, err)
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return fmt.Errorf("%s: timed out (check host, port and firewall; many hosting providers block outgoing port 25): %w", step, err)
+	}
+	return fmt.Errorf("%s: %w", step, err)
 }
 
 // smtpAuth picks PLAIN or LOGIN from what the server advertises. Go's PlainAuth refuses to send

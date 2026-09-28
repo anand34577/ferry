@@ -197,7 +197,11 @@ func FormatSize(n int64) string {
 
 // ParseDuration accepts Go durations plus days: "30m", "24h", "7d".
 func ParseDuration(v string) (time.Duration, error) {
+	v = strings.ToLower(strings.TrimSpace(v))
 	if n, err := strconv.Atoi(strings.TrimSuffix(v, "d")); err == nil && strings.HasSuffix(v, "d") && n >= 0 {
+		if n > 100*365 { // larger values overflow into a negative duration
+			return 0, fmt.Errorf("at most 36500d")
+		}
 		return time.Duration(n) * 24 * time.Hour, nil
 	}
 	d, err := time.ParseDuration(v)

@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -207,6 +208,11 @@ func Load() (*Config, error) {
 	if (c.TLSCert == "") != (c.TLSKey == "") {
 		errs = append(errs, "FERRY_TLS_CERT and FERRY_TLS_KEY must be set together")
 	}
+	for k, d := range map[string]time.Duration{"FERRY_SESSION_TTL": c.SessionTTL, "FERRY_UPLOAD_EXPIRY": c.UploadExpiry, "FERRY_DOWNLOAD_WINDOW": c.DownloadWindow} {
+		if d < time.Minute {
+			errs = append(errs, k+" must be at least 1m")
+		}
+	}
 	if c.AdminEmail != "" && len(c.AdminPassword) < 8 {
 		errs = append(errs, "FERRY_ADMIN_PASSWORD must be at least 8 characters when FERRY_ADMIN_EMAIL is set")
 	}
@@ -249,6 +255,12 @@ func (c *Config) Validate() error {
 		if c.OIDC.ClientID == "" {
 			errs = append(errs, "SSO needs a client ID")
 		}
+	}
+	if c.AuditRetention < time.Hour { // 0 would erase the audit log and link analytics at every cleanup
+		errs = append(errs, "keep the audit log for at least 1h (e.g. 90d)")
+	}
+	if c.SMTPPort <= 0 || c.SMTPPort > 65535 {
+		errs = append(errs, "the mail server port must be between 1 and 65535")
 	}
 	if (c.ShortenerURL == "") != (c.ShortenerToken == "") {
 		errs = append(errs, "the URL shortener needs both its address and an API key")
@@ -339,7 +351,7 @@ func ParseSize(s string) (int64, error) {
 		}
 	}
 	f, err := strconv.ParseFloat(s, 64)
-	if err != nil || f < 0 {
+	if err != nil || f < 0 || math.IsNaN(f) || f*float64(mult) >= math.MaxInt64 {
 		return 0, fmt.Errorf("expected a size like 500MB or 10GB")
 	}
 	return int64(f * float64(mult)), nil

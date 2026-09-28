@@ -91,8 +91,19 @@ class ServerManager(private val prefs: Prefs, private val scope: CoroutineScope)
     }
 
     suspend fun addServer(url: String, name: String): ServerProfile {
-        val norm = ServerApi.normalizeUrl(url)
-        val info = probe(norm)
+        var norm = ServerApi.normalizeUrl(url)
+        // "192.168.1.10:8080" is usually a plain-HTTP server on the local network: try HTTPS first, then HTTP.
+        val info = try {
+            probe(norm)
+        } catch (e: IllegalStateException) {
+            if (ServerApi.hasScheme(url)) throw e
+            val plain = "http://" + norm.removePrefix("https://")
+            try {
+                probe(plain).also { norm = plain }
+            } catch (_: Exception) {
+                throw e
+            }
+        }
         val existing = prefs.servers.value.find { it.url.equals(norm, true) }
         val p = existing ?: ServerProfile(UUID.randomUUID().toString(), name.ifBlank { info.optString("siteName", "Ferry") }, norm)
         prefs.saveServer(p)
@@ -133,6 +144,8 @@ class ServerManager(private val prefs: Prefs, private val scope: CoroutineScope)
             e is java.net.UnknownHostException -> "Server address not found. Check the address and your connection."
             e is java.net.ConnectException -> "Can't connect to the server. It may be offline or blocked on this network."
             e is java.net.SocketTimeoutException -> "The server isn't responding. Check your connection."
+            e is javax.net.ssl.SSLException && (e.message.orEmpty().contains("plaintext", true) || e.message.orEmpty().contains("Unrecognized SSL", true)) ->
+                "This server doesn't use HTTPS. Enter the address starting with http://"
             e is javax.net.ssl.SSLException -> "Secure connection failed. The server's HTTPS certificate isn't trusted by this phone."
             e is IllegalStateException -> e.message ?: "Error"
             else -> e.message ?: "Can't reach the server."

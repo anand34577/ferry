@@ -97,7 +97,7 @@
       if (!url) {
         var meta = "filename " + b64(file.name) + (uploader ? ",uploader " + b64(uploader) : "");
         var c = await req("POST", endpoint, Object.assign({ "Upload-Length": String(file.size), "Upload-Metadata": meta }, tus), null);
-        if (!c) { attempt++; ui.state("Reconnecting…"); await wait(Math.min(30000, 1000 * Math.pow(2, attempt))); continue; }
+        if (!c || c.status >= 500 || c.status === 429) { attempt++; ui.state("Reconnecting…"); await wait(Math.min(30000, 1000 * Math.pow(2, attempt))); continue; }
         if (c.status !== 201) { ui.state(errMsg(c), "err"); return false; }
         url = new URL(c.getResponseHeader("Location"), location.href).href;
         offset = 0;

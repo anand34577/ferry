@@ -115,6 +115,7 @@ export interface Me {
   deviceId: string;
   gotifyUrl: string;
   gotifyConfigured: boolean;
+  gotifySkipVerify?: boolean;
   hasPassword: boolean;
   impersonator?: string;
   prefs?: Record<string, unknown>;

@@ -105,7 +105,8 @@ Run one Ferry per set of data. A single instance comfortably serves a team; for 
 - **Sign out everywhere**, disable, reset password, turn off two-factor, **disconnect SSO**, change quota or role, delete.
 - **Single sign-on:** users with a connected provider account show an **SSO** chip. Set-up and user matching rules: [Single sign-on](sso.md).
 - **Links** (Admin → Links): search every link on the server, open its analytics, revoke or delete it.
-- **Settings → Email → Send test email** checks your mail settings and shows the mail server's exact error.
+- **Settings → Email → Send test email** checks your mail settings and shows the mail server's exact error, with the likely fix (untrusted certificate, wrong security mode for the port, rejected sign-in, …).
+- **Settings → Single sign-on → Test connection** loads the provider's configuration with the saved settings and explains what's wrong (wrong issuer URL, untrusted certificate, public client without secret).
 
 ## Link analytics
 
@@ -113,7 +114,7 @@ Each link records when it is opened, downloaded, previewed or uploaded to, and w
 
 ## Notifications (Gotify)
 
-Users can add their own [Gotify](https://gotify.net) server and application token in Settings → Notifications. Links with “Notify me” turned on then push a message when files arrive or are downloaded (and send an email when SMTP is configured), at most once every 10 minutes per link.
+Users can add their own [Gotify](https://gotify.net) server and application token in Settings → Notifications. Links with “Notify me” turned on then push a message when files arrive or are downloaded (and send an email when SMTP is configured), at most once every 10 minutes per link. On servers where anyone can get an account (sign-up or SSO auto-create), only administrators may use a Gotify server on the local network.
 
 ## URL shortener
 

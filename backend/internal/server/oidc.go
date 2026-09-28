@@ -15,12 +15,14 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -449,6 +451,43 @@ func (s *Server) handleAdminDeleteIdentities(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, 200, map[string]any{"ok": true, "removed": n})
 }
 
+// handleAdminTestSSO runs provider discovery with the saved settings and explains what's wrong.
+func (s *Server) handleAdminTestSSO(w http.ResponseWriter, r *http.Request) {
+	c := s.conf().OIDC
+	if !c.Enabled() {
+		s.writeErr(w, r, errf(400, "sso_disabled", "Enter and save an issuer URL first."))
+		return
+	}
+	s.oidc.reset()
+	_, p, _, err := s.oidcProvider()
+	if err != nil {
+		msg := err.Error()
+		var ua x509.UnknownAuthorityError
+		var cv *tls.CertificateVerificationError
+		switch {
+		case errors.As(err, &ua) || errors.As(err, &cv) || strings.Contains(msg, "certificate"):
+			msg = "the provider's certificate isn't trusted. Use a trusted certificate, or turn on \"Accept a self-signed provider certificate\" for testing. (" + msg + ")"
+		case strings.Contains(msg, "404"):
+			msg = "no OpenID configuration at " + strings.TrimRight(c.Issuer, "/") + "/.well-known/openid-configuration — check the issuer URL (Keycloak: https://host/realms/<realm>; Authentik: https://host/application/o/<slug>/). (" + msg + ")"
+		case strings.Contains(msg, "did not match"):
+			msg = "the issuer URL must be written exactly as the provider reports it. (" + msg + ")"
+		}
+		s.writeErr(w, r, errf(502, "sso_unreachable", "Couldn't use "+c.Issuer+": "+msg))
+		return
+	}
+	var meta struct {
+		Issuer  string   `json:"issuer"`
+		Methods []string `json:"token_endpoint_auth_methods_supported"`
+	}
+	p.Claims(&meta)
+	warn := ""
+	if c.ClientSecret == "" && len(meta.Methods) > 0 && !slices.Contains(meta.Methods, "none") {
+		warn = "No client secret is set, but the provider doesn't advertise public clients; sign-in will fail unless the client is public."
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "issuer": meta.Issuer, "authUrl": p.Endpoint().AuthURL, "warning": warn,
+		"redirectUri": s.baseURL(r) + "/api/v1/auth/oidc/callback"})
+}
+
 // ---------- helpers ----------
 
 func (s *Server) oidcFail(w http.ResponseWriter, r *http.Request, msg string) {
@@ -469,8 +508,10 @@ func (s *Server) domainAllowed(email string) bool {
 }
 
 // safeNext keeps redirects on this site ("/files", not "//evil.example" or "https://…").
+// Browsers drop tabs/newlines and treat "\" like "/", so "/\t/evil" or "/\evil" would leave the site.
 func safeNext(n string) string {
-	if !strings.HasPrefix(n, "/") || strings.HasPrefix(n, "//") || strings.HasPrefix(n, "/\\") || strings.HasPrefix(n, "/api/") {
+	if !strings.HasPrefix(n, "/") || strings.HasPrefix(n, "//") || strings.HasPrefix(n, "/api/") ||
+		strings.ContainsAny(n, "\\\t\r\n") || len(n) > 2048 {
 		return "/"
 	}
 	return n

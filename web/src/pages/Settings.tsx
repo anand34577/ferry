@@ -4,7 +4,7 @@ import { del, get, patch, post, type SessionInfo, type User } from "../lib/api";
 import { THEMES, applyTheme, getTheme, pref, setPref, useAuth, type Theme } from "../lib/auth";
 import { EXPIRY_OPTIONS, describeAgent, formatDate, relativeTime } from "../lib/format";
 import { Icon } from "../components/Icon";
-import { CopyField, ErrorBox, QR, useAsync, useDialogs, useToast } from "../components/ui";
+import { CopyField, ErrorBox, QR, Switch, useAsync, useDialogs, useToast } from "../components/ui";
 
 export function Settings() {
   const { user, info, setUser, logout, me, refreshMe } = useAuth();
@@ -152,7 +152,8 @@ export function Settings() {
 }
 
 function TwoFactor() {
-  const { user, setUser } = useAuth();
+  const { user, setUser, me } = useAuth();
+  const hasPassword = me?.hasPassword !== false;
   const toast = useToast();
   const [setup, setSetup] = useState<{ secret: string; uri: string } | null>(null);
   const [code, setCode] = useState("");
@@ -181,7 +182,7 @@ function TwoFactor() {
   const disable = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await post("/api/v1/me/totp/disable", { password: pw });
+      await post("/api/v1/me/totp/disable", hasPassword ? { password: pw } : { code: pw });
       setPw("");
       await refresh();
       toast.ok("Two-factor sign-in is off");
@@ -198,10 +199,17 @@ function TwoFactor() {
           <p className="muted">
             <Icon name="check" size={16} /> On. Signing in asks for a code from your authenticator app.
           </p>
-          <label className="field">
-            <span>Password (to turn it off)</span>
-            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" required />
-          </label>
+          {hasPassword ? (
+            <label className="field">
+              <span>Password (to turn it off)</span>
+              <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" required />
+            </label>
+          ) : (
+            <label className="field">
+              <span>Current code from your authenticator app (to turn it off)</span>
+              <input value={pw} onChange={(e) => setPw(e.target.value)} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9 ]{6,7}" maxLength={7} required />
+            </label>
+          )}
           <button className="btn self-start">Turn off</button>
         </form>
       ) : setup ? (
@@ -220,6 +228,8 @@ function TwoFactor() {
             </button>
           </div>
         </form>
+      ) : !hasPassword ? (
+        <p className="muted">Two-factor sign-in protects signing in with a password. Your account signs in with single sign-on, which your provider protects. Set a password above to use it here.</p>
       ) : (
         <>
           <p className="muted">Protect your account with a code from your phone in addition to your password. If you lose the phone, an administrator can turn it off for you.</p>
@@ -297,18 +307,39 @@ function Sessions() {
 function Notifications() {
   const { me, refreshMe, info } = useAuth();
   const toast = useToast();
+  const dialogs = useDialogs();
   const [url, setUrl] = useState(me?.gotifyUrl ?? "");
   const [token, setToken] = useState("");
+  const [insecure, setInsecure] = useState(!!me?.gotifySkipVerify);
   const [busy, setBusy] = useState(false);
   const configured = !!me?.gotifyConfigured;
+  // The profile may arrive after this panel first rendered (e.g. right after signing in).
+  useEffect(() => {
+    setUrl(me?.gotifyUrl ?? "");
+    setInsecure(!!me?.gotifySkipVerify);
+  }, [me?.gotifyUrl, me?.gotifySkipVerify]);
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     try {
-      await patch("/api/v1/me", token ? { gotifyUrl: url, gotifyToken: token } : { gotifyUrl: url });
+      await patch("/api/v1/me", { gotifyUrl: url.trim(), gotifySkipVerify: insecure, ...(token.trim() ? { gotifyToken: token.trim() } : {}) });
       setToken("");
       await refreshMe();
-      toast.ok(url ? "Gotify settings saved" : "Gotify notifications turned off");
+      toast.ok(url.trim() ? "Gotify settings saved — use “Send test” to check them" : "Gotify notifications turned off");
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async () => {
+    if (!(await dialogs.confirm("Turn off Gotify notifications?", "The server address and token are forgotten.", "Turn off", true))) return;
+    setBusy(true);
+    try {
+      await patch("/api/v1/me", { gotifyUrl: "", gotifySkipVerify: false });
+      setToken("");
+      await refreshMe();
+      toast.ok("Gotify notifications turned off");
     } catch (err) {
       toast.error(err);
     } finally {
@@ -336,20 +367,29 @@ function Notifications() {
       <form className="form" onSubmit={save}>
         <label className="field">
           <span>Gotify server</span>
-          <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://gotify.example.com" inputMode="url" />
+          <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://gotify.example.com" inputMode="url" autoComplete="off" spellCheck={false} />
+          <small className="hint">https:// and plain http:// (e.g. on your home network) both work.</small>
         </label>
         <label className="field">
           <span>Application token {configured && <span className="chip ok">saved</span>}</span>
-          <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={configured ? "Leave empty to keep the saved token" : "Create an application in Gotify and paste its token"} autoComplete="off" required={!configured && !!url} />
+          <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={configured ? "Leave empty to keep the saved token" : "Create an application in Gotify and paste its token"} autoComplete="off" required={!configured && !!url.trim()} />
         </label>
+        {url.trim().toLowerCase().startsWith("https://") && (
+          <Switch checked={insecure} onChange={setInsecure} label="Accept self-signed certificate" hint="Only for your own Gotify server with a certificate browsers don't trust." />
+        )}
         <div className="row-actions">
           <button className="btn primary" disabled={busy}>
-            Save
+            {busy ? "Saving…" : "Save"}
           </button>
           {configured && (
-            <button type="button" className="btn" onClick={test} disabled={busy}>
-              <Icon name="send" size={18} /> Send test
-            </button>
+            <>
+              <button type="button" className="btn" onClick={test} disabled={busy}>
+                <Icon name="send" size={18} /> Send test
+              </button>
+              <button type="button" className="btn danger" onClick={remove} disabled={busy}>
+                Turn off
+              </button>
+            </>
           )}
         </div>
       </form>
