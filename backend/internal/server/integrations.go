@@ -176,7 +176,7 @@ func (s *Server) shorten(ctx context.Context, sh *Share, longURL string) error {
 	if !s.shortenerOn() {
 		return nil
 	}
-	body, _ := json.Marshal(map[string]any{"targetUrl": longURL, "title": sh.Name, "tags": []string{"ferry"}})
+	body, _ := json.Marshal(map[string]any{"targetUrl": longURL, "title": clip(sh.Name, 200), "tags": []string{"ferry"}})
 	var out struct {
 		ID       string `json:"id"`
 		ShortURL string `json:"shortUrl"`
