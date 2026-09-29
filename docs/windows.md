@@ -69,11 +69,12 @@ Uninstalling removes the program, the firewall rule, the **Send to** entry and t
 
 ## Build from source
 
-Requirements: Go 1.26, Node.js 22, [Wails](https://wails.io) v2.16 (`go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0`) and, for the installer, [NSIS](https://nsis.sourceforge.io).
+Requirements: Go 1.26, Node.js 22, [Wails](https://wails.io) v2.16 (`go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0`) and, for the installer, [Inno Setup 6](https://jrsoftware.org/isinfo.php).
 
 ```bash
 cd desktop
-wails build -clean -nsis
+wails build -clean
+"C:/Program Files (x86)/Inno Setup 6/ISCC.exe" /DAppVersion=1.5.0 build/windows/installer.iss
 ```
 
-This writes `build/bin/FerryDesktop.exe` and `build/bin/Ferry-amd64-installer.exe`. For UI work, `npm run dev` in `desktop/frontend` runs the interface in a browser with a stand-in for the Windows engine.
+This writes `build/bin/FerryDesktop.exe` and the installer `build/bin/Ferry-setup.exe`. For UI work, `npm run dev` in `desktop/frontend` runs the interface in a browser with a stand-in for the Windows engine.
