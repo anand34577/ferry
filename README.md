@@ -12,7 +12,7 @@ Ferry is self-hosted file sharing and transfer. Your files stay on hardware you 
 - **Secure by default:** two-factor sign-in, single sign-on (OIDC: Keycloak, Authentik, Google, …), session management, rate limits, full audit log
 - **Link analytics, notifications and themes:** see who opened and downloaded your links, get Gotify or email alerts, optional short links via Shortr, 12 colour themes
 
-Ferry runs as a single program with the web app built in, on Windows, macOS and Linux (including Raspberry Pi), or in Docker. An Android app is included.
+Ferry runs as a single program with the web app built in, on Windows, macOS and Linux (including Raspberry Pi), or in Docker. Apps for Android and Windows are included.
 
 ## Quick start
 
@@ -43,7 +43,7 @@ Then open **http://localhost:8080** and create the administrator account.
 | Get started | Use Ferry | Run a server |
 |---|---|---|
 | [Getting started](docs/getting-started.md) | [User guide](docs/user-guide.md) | [Configuration](docs/configuration.md) |
-| [Install with Docker](docs/install-docker.md) | [Android app](docs/android.md) | [Administration](docs/administration.md) |
+| [Install with Docker](docs/install-docker.md) | [Android app](docs/android.md) · [Windows app](docs/windows.md) | [Administration](docs/administration.md) |
 | [Install the program](docs/install-binary.md) | | [Single sign-on](docs/sso.md) |
 | | | [Troubleshooting](docs/troubleshooting.md) |
 | [HTTPS](docs/https.md) | | |
@@ -57,6 +57,7 @@ Developers: [Development guide](docs/development.md) · [Contributing](CONTRIBUT
 | [`backend/`](backend) | Server (Go): API, share pages, storage, service management |
 | [`web/`](web) | Web app (React, TypeScript), built into the server |
 | [`android/`](android) | Android app (Kotlin, Jetpack Compose) |
+| [`desktop/`](desktop) | Windows app (Go + Wails, React) |
 | [`deployment/`](deployment) | Example settings and reverse proxy configurations |
 
 ## Security

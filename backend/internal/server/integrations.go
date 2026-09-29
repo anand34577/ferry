@@ -143,7 +143,7 @@ func (s *Server) gotify(ctx context.Context, userID, title, message string) erro
 	case res.StatusCode == 404 || res.StatusCode == 405:
 		return fmt.Errorf("%s doesn't look like a Gotify server (%d)", gURL, res.StatusCode)
 	case res.StatusCode >= 300:
-		return fmt.Errorf("Gotify answered %d %s", res.StatusCode, http.StatusText(res.StatusCode))
+		return fmt.Errorf("the Gotify server answered %d %s", res.StatusCode, http.StatusText(res.StatusCode))
 	}
 	return nil
 }
