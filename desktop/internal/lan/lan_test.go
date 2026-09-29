@@ -118,6 +118,31 @@ func TestSendResumeVerify(t *testing.T) {
 	}
 }
 
+// Stock LocalSend uploads with chunked encoding and no Content-Length.
+func TestChunkedUpload(t *testing.T) {
+	h := &testHost{dir: t.TempDir(), accept: true}
+	_, p := startReceiver(t, h)
+	ctx := context.Background()
+	data := bytes.Repeat([]byte("chunked-"), 50_000)
+	self := SelfInfo("localsend", "LSFP", Port, nil)
+	files := map[string]FileMeta{"a": {ID: "a", FileName: "a.bin", Size: int64(len(data))}, "b": {ID: "b", FileName: "b.bin", Size: int64(len(data))}}
+	prep, err := Prepare(ctx, p, self, files, "")
+	if err != nil || prep == nil {
+		t.Fatalf("prepare: %v %v", prep, err)
+	}
+	// Longer than declared is refused and nothing is saved for that file.
+	if err := Upload(ctx, p, prep.SessionID, "b", prep.Tokens["b"], 0, bytes.NewReader(append(data, 'x')), -1); err == nil {
+		t.Fatal("oversized chunked upload accepted")
+	}
+	if err := Upload(ctx, p, prep.SessionID, "a", prep.Tokens["a"], 0, bytes.NewReader(data), -1); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(filepath.Join(h.dir, "a.bin"))
+	if !bytes.Equal(got, data) {
+		t.Fatal("content differs")
+	}
+}
+
 func TestDeclineAndPIN(t *testing.T) {
 	h := &testHost{dir: t.TempDir(), accept: false, pin: "1234"}
 	_, p := startReceiver(t, h)
