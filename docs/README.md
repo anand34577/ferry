@@ -17,6 +17,7 @@ Everything you need to install, use and run Ferry.
 |---|---|
 | [User guide](user-guide.md) | Sending, receiving, links, uploads, account security |
 | [Android app](android.md) | Nearby transfers without internet, your devices, sharing from any app |
+| [Windows app](windows.md) | Send and receive nearby, send to your devices and create links from your PC |
 
 ## Running a server
 

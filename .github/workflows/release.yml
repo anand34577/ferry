@@ -54,6 +54,29 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: android, path: dist/* }
 
+  desktop:
+    runs-on: windows-latest
+    defaults: { run: { working-directory: desktop, shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26.x", check-latest: true, cache-dependency-path: desktop/go.sum }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+      - name: Build the Windows app and installer
+        run: |
+          command -v makensis || choco install nsis -y --no-progress
+          export PATH="$PATH:/c/Program Files (x86)/NSIS"
+          v="${GITHUB_REF_NAME#v}"; v="${v%%-*}" # the installer needs a plain x.y.z
+          sed -i "s/\"productVersion\": \"[^\"]*\"/\"productVersion\": \"$v\"/" wails.json
+          wails build -clean -trimpath -nsis -ldflags "-X main.version=${GITHUB_REF_NAME}"
+          mkdir -p ../dist
+          cp build/bin/Ferry-amd64-installer.exe "../dist/ferry-windows_${GITHUB_REF_NAME}_setup.exe"
+          cp build/bin/FerryDesktop.exe "../dist/ferry-windows_${GITHUB_REF_NAME}_portable.exe"
+      - uses: actions/upload-artifact@v4
+        with: { name: desktop, path: dist/* }
+
   image:
     runs-on: ubuntu-latest
     steps:
@@ -74,7 +97,7 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/ferry:latest
 
   release:
-    needs: [binaries, android, image]
+    needs: [binaries, android, desktop, image]
     runs-on: ubuntu-latest
     steps:
       # Only the release files (the Docker build also uploads a build-record artifact).
@@ -82,6 +105,8 @@ jobs:
         with: { name: binaries, path: dist }
       - uses: actions/download-artifact@v4
         with: { name: android, path: dist }
+      - uses: actions/download-artifact@v4
+        with: { name: desktop, path: dist }
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
@@ -99,7 +124,9 @@ jobs:
             **Program** — download the archive for your system below, unpack it and run `ferry` (Windows: `ferry.exe`).
             To run it as a service that starts automatically: `sudo ./ferry service install` (Windows: `.\ferry.exe service install` in an Administrator terminal).
 
-            **Android** — install `ferry_${{ github.ref_name }}.apk` on your phone.
+            **Windows app** — run `ferry-windows_${{ github.ref_name }}_setup.exe` to install Ferry for Windows: send and receive nearby (works with the Android app and LocalSend), send to your devices through your server and create links. A portable `…_portable.exe` needs no installation (it needs the Microsoft Edge WebView2 runtime, included in Windows 10/11).
+
+                        **Android** — install `ferry_${{ github.ref_name }}.apk` on your phone.
 
             Then open http://localhost:8080 and create the administrator account. Guides: [documentation](https://github.com/${{ github.repository }}/tree/main/docs).
 

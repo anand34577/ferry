@@ -1,0 +1,25 @@
+name: Desktop
+on:
+  push: { paths: ["desktop/**", ".github/workflows/desktop.yml"] }
+  pull_request: { paths: ["desktop/**"] }
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults: { run: { working-directory: desktop, shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26.x", check-latest: true, cache-dependency-path: desktop/go.sum }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: desktop/frontend/package-lock.json }
+      - run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+      - run: go test ./internal/...
+      - name: Type-check the UI
+        run: cd frontend && npm ci --no-audit --no-fund && npx tsc --noEmit
+      - name: Build app and installer
+        run: |
+          command -v makensis || choco install nsis -y --no-progress
+          export PATH="$PATH:/c/Program Files (x86)/NSIS"
+          wails build -clean -trimpath -nsis -ldflags "-X main.version=dev-${GITHUB_SHA::7}"
+      - uses: actions/upload-artifact@v4
+        with: { name: ferry-windows, path: desktop/build/bin/* }
