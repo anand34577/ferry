@@ -50,7 +50,9 @@ jobs:
           FERRY_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           FERRY_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         # Without the keystore Gradle falls back to the debug key; never publish a debug-signed release.
-        run: test -n "$FERRY_KEYSTORE" || { echo "::error::ANDROID_KEYSTORE_BASE64 secret is missing"; exit 1; } && ./gradlew assembleRelease bundleRelease --no-daemon && mkdir -p ../dist && cp app/build/outputs/apk/release/*.apk ../dist/ferry_${GITHUB_REF_NAME}.apk && cp app/build/outputs/bundle/release/*.aab ../dist/ferry_${GITHUB_REF_NAME}.aab
+        run: test -n "$FERRY_KEYSTORE" || { echo "::error::ANDROID_KEYSTORE_BASE64 secret is missing"; exit 1; } && ./gradlew assembleRelease bundleRelease --no-daemon && mkdir -p ../dist
+          && cp app/build/outputs/apk/phone/release/*.apk ../dist/ferry_${GITHUB_REF_NAME}.apk && cp app/build/outputs/bundle/phoneRelease/*.aab ../dist/ferry_${GITHUB_REF_NAME}.aab
+          && cp app/build/outputs/apk/tv/release/*.apk ../dist/ferry-tv_${GITHUB_REF_NAME}.apk && cp app/build/outputs/bundle/tvRelease/*.aab ../dist/ferry-tv_${GITHUB_REF_NAME}.aab
       - uses: actions/upload-artifact@v4
         with: { name: android, path: dist/* }
 

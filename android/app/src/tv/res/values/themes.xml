@@ -1,0 +1,7 @@
+<resources>
+    <!-- TV is always dark: no white flash while the app starts. -->
+    <style name="Theme.Ferry" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+    </style>
+    <color name="bg">#0E0F13</color>
+</resources>

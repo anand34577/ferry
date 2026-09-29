@@ -66,19 +66,6 @@ import dev.ferry.app.data.TFile
 import dev.ferry.app.util.formatBytes
 import kotlinx.coroutines.flow.MutableStateFlow
 
-/** Files queued for sending (from the picker or another app's share sheet). */
-object SendQueue {
-    val files = MutableStateFlow<List<TFile>>(emptyList())
-    fun add(list: List<TFile>) {
-        files.value = (files.value + list).distinctBy { it.uri }
-    }
-}
-
-/** Deep links / notifications ask the UI to navigate somewhere. */
-object Nav {
-    val pending = MutableStateFlow<String?>(null)
-}
-
 private val TABS = setOf("home", "transfers", "server", "settings")
 
 @Composable

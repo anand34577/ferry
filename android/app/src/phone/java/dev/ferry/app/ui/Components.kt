@@ -422,12 +422,6 @@ fun QrImage(value: String, size: Dp = 200.dp) {
     }
 }
 
-fun qrBitmap(value: String, px: Int): Bitmap {
-    val m = QRCodeWriter().encode(value, BarcodeFormat.QR_CODE, px, px, mapOf(EncodeHintType.MARGIN to 1))
-    val pixels = IntArray(px * px) { i -> if (m.get(i % px, i / px)) 0xFF111318.toInt() else 0xFFFFFFFF.toInt() }
-    return Bitmap.createBitmap(pixels, px, px, Bitmap.Config.ARGB_8888)
-}
-
 /** Big primary action button (56dp, fully rounded). */
 @Composable
 fun BigButton(text: String, icon: ImageVector? = null, modifier: Modifier = Modifier, enabled: Boolean = true, tonal: Boolean = false, onClick: () -> Unit) {

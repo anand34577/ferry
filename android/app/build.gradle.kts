@@ -12,9 +12,23 @@ android {
         applicationId = "dev.ferry.app"
         minSdk = 29
         targetSdk = 36
-        versionCode = 8
-        versionName = "1.6.1"
+        versionCode = 9
+        versionName = "1.7.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Two apps from one codebase: the backend (src/main) is shared, each flavor has its own UI.
+    flavorDimensions += "device"
+    productFlavors {
+        create("phone") {
+            dimension = "device"
+            buildConfigField("String", "DEVICE_TYPE", "\"mobile\"")
+        }
+        create("tv") {
+            dimension = "device"
+            applicationId = "dev.ferry.tv"
+            buildConfigField("String", "DEVICE_TYPE", "\"desktop\"") // closest LocalSend device type to a TV screen
+        }
     }
 
     signingConfigs {
@@ -71,9 +85,12 @@ dependencies {
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.79")
     implementation("com.google.zxing:core:3.5.3")
-    implementation("androidx.camera:camera-camera2:1.6.2")
-    implementation("androidx.camera:camera-lifecycle:1.6.2")
-    implementation("androidx.camera:camera-view:1.6.2")
+    // QR scanning is phone-only; TVs have no camera to scan with.
+    "phoneImplementation"("androidx.camera:camera-camera2:1.6.2")
+    "phoneImplementation"("androidx.camera:camera-lifecycle:1.6.2")
+    "phoneImplementation"("androidx.camera:camera-view:1.6.2")
+    // Compose for TV: focus scaling, navigation drawer and remote-friendly components.
+    "tvImplementation"("androidx.tv:tv-material:1.0.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

@@ -1,5 +1,5 @@
 ; Ferry for Windows — Inno Setup installer.
-; Build (after `wails build`):  ISCC.exe /DAppVersion=1.6.1 build\windows\installer.iss
+; Build (after `wails build`):  ISCC.exe /DAppVersion=1.7.0 build\windows\installer.iss
 ; Output: build\bin\Ferry-setup.exe
 
 #ifndef AppVersion
