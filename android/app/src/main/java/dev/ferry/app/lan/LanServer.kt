@@ -98,9 +98,12 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
     private fun prepare(s: IHTTPSession): Response {
         if (!app.prefs.receiving) return err(Response.Status.FORBIDDEN, "This device is not receiving right now.")
         val cur = session
-        if (cur != null && !cur.cancelled && System.currentTimeMillis() - cur.lastActivity < 10 * 60_000 && cur.files.values.any { !it.done }) {
+        // Ferry senders resume for 10 minutes; a stock LocalSend sender can't, so its session ends sooner.
+        val idleLimit = if (cur?.ferry == true) 10 * 60_000 else 2 * 60_000
+        if (cur != null && !cur.cancelled && System.currentTimeMillis() - cur.lastActivity < idleLimit && cur.files.values.any { !it.done }) {
             return err(Response.Status.CONFLICT, "Busy with another transfer")
         }
+        if (cur != null) expire(cur)
         if (app.prefs.requirePin && app.prefs.pin.isNotEmpty()) {
             // A 4–6 digit PIN falls to brute force in minutes without a limit: 5 misses lock it for a minute.
             val now = System.currentTimeMillis()
@@ -196,6 +199,7 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
             // A chunked body's length is only known at its end: reject one that's longer or shorter than declared.
             if (chunked && input.read() >= 0) return err(Response.Status.BAD_REQUEST, "More data than declared")
             if (chunked && f.received != f.size) throw IOException("Upload ended early")
+            if (sess.cancelled) throw IOException("cancelled") // cancelled while the last bytes arrived: don't keep the file
             if (f.received == f.size) {
                 f.sha = md.digest().hex()
                 if (f.expectedSha.isNotEmpty() && f.expectedSha != f.sha) {
@@ -211,6 +215,7 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
         } catch (e: IOException) {
             if (sess.cancelled) {
                 cleanup(sess)
+                return err(Response.Status.FORBIDDEN, "Cancelled by the receiver").also { it.closeConnection(true) }
             } else {
                 // Keep the partial file: a Ferry sender can resume from f.received for 10 minutes.
                 app.transfers.lanReceiveStatus(sess.transferId, TStatus.INTERRUPTED, "Connection lost — waiting for the sender to resume…")
@@ -219,6 +224,13 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
         } finally {
             f.busy = false
         }
+    }
+
+    /** Closes a session whose sender went away, so its transfer doesn't stay "in progress" forever. */
+    private fun expire(sess: Session) {
+        val all = sess.files.values.all { it.done }
+        cleanup(sess)
+        app.transfers.lanReceiveFinished(sess.transferId, if (all) TStatus.COMPLETED else TStatus.FAILED, if (all) "" else "The sender stopped sending.", sess.alias)
     }
 
     private fun maybeFinish(sess: Session) {

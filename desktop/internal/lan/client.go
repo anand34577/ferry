@@ -14,11 +14,15 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 // ErrIdentityChanged means a peer presented a different certificate than the one pinned for it.
 var ErrIdentityChanged = errors.New("the device's identity changed — its certificate doesn't match. For your safety the connection was refused")
+
+// clientCert is this device's identity, presented to peers that ask for a client certificate.
+var clientCert atomic.Pointer[tls.Certificate]
 
 // client returns an HTTP client for one peer. Peers use self-signed certificates, so trust is pinning:
 // the certificate seen on first contact (or the fingerprint in a scanned QR code) must match every later
@@ -28,8 +32,15 @@ func client(pin string, timeout time.Duration, seen *string) *http.Client {
 		DialContext:           (&net.Dialer{Timeout: 4 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   6 * time.Second,
 		ResponseHeaderTimeout: timeout,
-		MaxIdleConnsPerHost:   4,
+		DisableKeepAlives:     true, // every client is used for one call; idle connections would pile up
 		TLSClientConfig: &tls.Config{
+			// Current LocalSend requires a client certificate (mTLS) and uses it as the sender's identity.
+			GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+				if c := clientCert.Load(); c != nil {
+					return c, nil
+				}
+				return &tls.Certificate{}, nil
+			},
 			InsecureSkipVerify: true, //nolint:gosec // identity is the pinned fingerprint below, not a CA chain or host name
 			VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
 				if len(raw) == 0 {

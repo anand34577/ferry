@@ -547,6 +547,9 @@ func (a *App) Cancel(id string) {
 		a.store.finish(id, stCancelled, "Cancelled")
 	}
 	if t, ok := a.store.get(id); ok && (t.Paused || final(t.Status)) {
+		if c.cancelPeer != nil {
+			c.cancelPeer()
+		}
 		a.store.finish(id, stCancelled, "Cancelled")
 	}
 }

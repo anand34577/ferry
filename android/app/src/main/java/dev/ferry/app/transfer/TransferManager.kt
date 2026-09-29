@@ -174,17 +174,24 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
     // ---------- controls ----------
 
     fun cancel(id: String) {
+        // An incoming LAN transfer must be stopped on the receiver too. Receiving progress creates a Control
+        // as well, so this can't depend on whether one exists.
+        app.discovery.server?.cancelActive(id)
         val c = controls[id]
         if (c == null) {
-            // Incoming LAN transfer or a waiting server transfer.
-            app.discovery.server?.cancelActive(id)
             get(id)?.let { finish(id, TStatus.CANCELLED, "Cancelled") }
             return
         }
         c.paused.set(false)
         c.cancelled.set(true)
         c.call?.cancel()
-        if (c.job?.isActive != true) finish(id, TStatus.CANCELLED, "Cancelled")
+        if (c.job?.isActive != true) {
+            // A paused direct send still holds a session on the receiver: tell it we're done.
+            val peer = c.peer
+            val st = c.direct
+            if (peer != null && st != null) scope.launch(Dispatchers.IO) { LanClient.cancel(peer, st.sessionId) }
+            finish(id, TStatus.CANCELLED, "Cancelled")
+        }
     }
 
     fun pause(id: String) {
@@ -273,11 +280,15 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
                         c.direct?.let { LanClient.cancel(peer, it.sessionId) }
                         finish(id, TStatus.CANCELLED, "Cancelled")
                     }
+                    // The receiver dropped the session (its user cancelled): nothing more to send.
+                    e is PeerException && e.status == 403 && c.direct != null -> finish(id, TStatus.CANCELLED, "${peer.alias} cancelled the transfer.")
                     e is PeerException && e.status == 403 -> finish(id, TStatus.REJECTED, "${peer.alias} declined the files.")
                     e is PeerException && e.status == 409 -> finish(id, TStatus.FAILED, "${peer.alias} is busy with another transfer. Try again in a moment.")
                     e is PeerException && e.message?.contains("checksum", true) == true ->
                         finish(id, TStatus.FAILED, "The file arrived corrupted (checksum mismatch). Please retry.")
                     else -> {
+                        android.util.Log.w("Ferry", "direct send to ${peer.alias} failed", e)
+                        c.direct?.let { LanClient.cancel(peer, it.sessionId) } // free the receiver: LocalSend accepts one session at a time
                         val why = unreachableReason(e, peer)
                         val fallback = fallbackDeviceId?.takeIf { app.server.online && app.prefs.method != "direct" && c.direct == null }
                         if (fallback != null) {
@@ -295,7 +306,7 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
         e is javax.net.ssl.SSLPeerUnverifiedException || e.cause is java.security.cert.CertificateException || e is javax.net.ssl.SSLHandshakeException ->
             "${peer.alias}'s identity changed or couldn't be verified. For your safety the connection was refused."
         e is ConnectException || e is NoRouteToHostException || e is SocketTimeoutException ->
-            "Couldn't connect directly to ${peer.alias}. You may be on different networks, or this Wi-Fi blocks device-to-device traffic (client isolation, guest or corporate network)."
+            "Couldn't connect directly to ${peer.alias} (${e.message ?: e.javaClass.simpleName}). You may be on different networks, or this Wi-Fi blocks device-to-device traffic (client isolation, guest or corporate network)."
         else -> "Connection to ${peer.alias} was lost (${e.message ?: "network error"})."
     }
 
@@ -306,7 +317,7 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
         while (true) {
             if (c.cancelled.get()) throw CancelledException()
             try {
-                val offset = if (resuming && peer.ferry) LanClient.offset(peer, st.sessionId, f.id, token) else 0L
+                val offset = if (resuming && peer.ferry) LanClient.offset(peer, st.sessionId, f.id, token) else 0L // 403 = session gone
                 val md = MessageDigest.getInstance("SHA-256")
                 ctx.contentResolver.openInputStream(f.uri!!)?.use { input ->
                     hashPrefix(input, md, offset)
@@ -549,7 +560,7 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
         if (s == TStatus.FAILED) finish(id, s, note) else status(id, s, note)
     }
     fun lanReceiveFinished(id: String, s: TStatus, error: String, @Suppress("UNUSED_PARAMETER") alias: String) {
-        if (get(id) != null || s != TStatus.COMPLETED) finish(id, s, error)
+        if (get(id) != null) finish(id, s, error) // already finished (e.g. cancelled here) → leave history alone
     }
 
     /** Checks my server inbox for files sent to this device (from the web or my other devices). */

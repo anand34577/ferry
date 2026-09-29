@@ -78,7 +78,12 @@ type session struct {
 }
 
 func (s *session) active() bool {
-	if s.cancelled.Load() || time.Since(time.UnixMilli(s.lastActivity.Load())) > 10*time.Minute {
+	// Ferry senders resume for 10 minutes; a stock LocalSend sender can't, so its session ends sooner.
+	idle := 10 * time.Minute
+	if !s.ferry {
+		idle = 2 * time.Minute
+	}
+	if s.cancelled.Load() || time.Since(time.UnixMilli(s.lastActivity.Load())) > idle {
 		return false
 	}
 	for _, f := range s.files {
@@ -203,6 +208,11 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	busy := s.sess != nil && s.sess.active()
+	if old := s.sess; old != nil && !busy {
+		s.mu.Unlock()
+		s.expire(old)
+		s.mu.Lock()
+	}
 	if pin := s.host.PIN(); !busy && pin != "" {
 		// A short PIN falls to brute force in minutes without a limit: 5 misses lock it for a minute.
 		locked := time.Now().Before(s.pinLockUntil)
@@ -342,7 +352,13 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	s.host.RecvStatus(sess.transferID, "transferring", "")
 	if err := s.receive(r, sess, f, offset, length, chunked); err != nil {
 		if sess.cancelled.Load() {
+			if f.tmp != "" { // cleanup skips a file that is still busy
+				os.Remove(f.tmp)
+				f.tmp = ""
+			}
 			s.cleanup(sess)
+			fail(w, 403, "Cancelled by the receiver")
+			return
 		} else if errors.Is(err, errChecksum) {
 			s.host.RecvFinished(sess.transferID, "failed", fmt.Sprintf("%q was corrupted in transit (checksum mismatch).", f.name))
 		} else {
@@ -433,6 +449,12 @@ func (s *Server) receive(r *http.Request, sess *session, f *rfile, offset, lengt
 	}
 	if f.received.Load() < f.size {
 		return nil // more parts follow (resumed upload)
+	}
+	if sess.cancelled.Load() { // cancelled while the last bytes arrived: don't keep the file
+		out.Close()
+		os.Remove(f.tmp)
+		f.tmp = ""
+		return errors.New("cancelled")
 	}
 	if err := out.Close(); err != nil {
 		return err
@@ -533,6 +555,22 @@ func (s *Server) CancelActive(transferID string) {
 	if sess != nil && sess.transferID == transferID {
 		sess.cancelled.Store(true)
 		s.cleanup(sess)
+	}
+}
+
+// expire closes a session whose sender went away, so its transfer doesn't stay "in progress" forever.
+func (s *Server) expire(sess *session) {
+	s.mu.Lock()
+	all := true
+	for _, f := range sess.files {
+		all = all && f.done
+	}
+	s.mu.Unlock()
+	s.cleanup(sess)
+	if all {
+		s.host.RecvFinished(sess.transferID, "completed", "")
+	} else {
+		s.host.RecvFinished(sess.transferID, "failed", "The sender stopped sending.")
 	}
 }
 
@@ -658,8 +696,8 @@ func firstNonEmpty(v ...string) string {
 
 // MimeOf guesses a file's MIME type from its name.
 func MimeOf(name string) string {
-	if t := mime.TypeByExtension(strings.ToLower(filepath.Ext(name))); t != "" {
-		return t
+	if t, _, err := mime.ParseMediaType(mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))); err == nil {
+		return t // without parameters like "; charset=utf-8"
 	}
 	return "application/octet-stream"
 }
