@@ -16,7 +16,7 @@ object LocalSend {
         .put("alias", alias)
         .put("version", VERSION)
         .put("deviceModel", listOfNotNull(Build.MANUFACTURER?.replaceFirstChar { it.uppercase() }, Build.MODEL).distinct().joinToString(" ").take(60))
-        .put("deviceType", "mobile")
+        .put("deviceType", dev.ferry.app.BuildConfig.DEVICE_TYPE)
         .put("fingerprint", fingerprint)
         .put("port", port)
         .put("protocol", "https")

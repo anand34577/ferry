@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android TV launcher banner (320x180dp): brand gradient, logo and "Ferry" wordmark. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="320dp" android:height="180dp" android:viewportWidth="320" android:viewportHeight="180">
+    <path android:pathData="M0,0 H320 V180 H0 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="0" android:startY="0" android:endX="320" android:endY="180"
+                android:startColor="#2456F5" android:centerColor="#6B4DFF" android:endColor="#9B5CFF" />
+        </aapt:attr>
+    </path>
+    <!-- Logo: tray and arrow, from the launcher icon. -->
+    <group android:translateX="12" android:translateY="37">
+        <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="6" android:strokeLineJoin="round"
+            android:pathData="M34,52 L74,52 L68,70 Q67,74 63,74 L45,74 Q41,74 40,70 Z" />
+        <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="6" android:strokeLineCap="round"
+            android:strokeLineJoin="round" android:pathData="M54,32 L54,50 M46,40 L54,32 L62,40" />
+    </group>
+    <!-- Wordmark "Ferry", drawn as strokes. -->
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="8" android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M112,70 L112,112 M112,70 L138,70 M112,90 L134,90
+            M152,97 L178,97 A13,13 0 1,0 173,107
+            M192,84 L192,112 M192,94 Q196,84 208,84
+            M220,84 L220,112 M220,94 Q224,84 236,84
+            M248,84 L261,111 M274,84 L256,125 Q253,131 246,131" />
+</vector>

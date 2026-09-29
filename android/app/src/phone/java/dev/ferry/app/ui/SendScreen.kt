@@ -316,20 +316,6 @@ private fun PeerTile(p: Peer, trusted: Boolean, modifier: Modifier, onClick: () 
     }
 }
 
-/** Accepts a pairing code ("60A-R0BQ"), an IP, or IP:port. */
-suspend fun connectInput(input: String): Peer {
-    val app = FerryApp.app
-    val t = input.trim()
-    val (ip, port) = PairCode.decode(t)
-        ?: Regex("""^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?$""").find(t)?.let { it.groupValues[1] to (it.groupValues[2].toIntOrNull() ?: PairCode.DEFAULT_PORT) }
-        ?: throw IllegalArgumentException("Enter a pairing code like 60A-R0BQ or an IP address like 192.168.1.20")
-    return try {
-        app.discovery.connect(ip, port, "", "code")
-    } catch (e: Exception) {
-        throw IllegalStateException("No Ferry/LocalSend device answered at $ip:$port. Check that it's receiving and on the same network.")
-    }
-}
-
 /** Compact decision dialog with an icon, text and one or more actions. */
 @Composable
 fun ChoiceDialog(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, text: String, actions: List<Pair<String, () -> Unit>>, onDismiss: () -> Unit) {
