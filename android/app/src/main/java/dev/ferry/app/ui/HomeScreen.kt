@@ -116,7 +116,7 @@ fun HomeScreen(nav: NavHostController) {
         // Hero: Send
         Spacer(Modifier.height(18.dp))
         Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).background(BrandGradient).clickable { pick.launch(arrayOf("*/*")) }.padding(22.dp),
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).background(BrandGradient).clickable { pick.pickFiles(ctx) }.padding(22.dp),
         ) {
             // soft decorative circles
             Box(Modifier.align(Alignment.TopEnd).offset(x = 60.dp, y = (-70).dp).size(170.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.10f)))

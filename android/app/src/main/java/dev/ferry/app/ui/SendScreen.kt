@@ -163,7 +163,7 @@ fun SendScreen(nav: NavHostController) {
                         Column(
                             Modifier.width(96.dp).height(122.dp).clip(RoundedCornerShape(22.dp))
                                 .border(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), RoundedCornerShape(22.dp))
-                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)).clickable { pick.launch(arrayOf("*/*")) },
+                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)).clickable { pick.pickFiles(ctx) },
                             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
                         ) {
                             Icon(Icons.Rounded.Add, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))

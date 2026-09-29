@@ -13,10 +13,23 @@
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
+    <!-- Tablets and Android TV: no touchscreen, camera or portrait orientation required. -->
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
+
+    <!-- Lets Ferry check for a file picker before opening one; many Android TVs have none. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.OPEN_DOCUMENT" />
+            <data android:mimeType="*/*" />
+        </intent>
+    </queries>
 
     <application
         android:name=".FerryApp"
         android:allowBackup="false"
+        android:banner="@drawable/tv_banner"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
@@ -33,6 +46,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

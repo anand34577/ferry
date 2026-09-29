@@ -1,15 +1,12 @@
 package dev.ferry.app.transfer
 
-import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
 import dev.ferry.app.FerryApp
 import dev.ferry.app.MainActivity
 import dev.ferry.app.R
@@ -39,7 +36,12 @@ object Notifier {
     }
 
     private fun canPost(ctx: Context) =
-        ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        NotificationManagerCompat.from(ctx).areNotificationsEnabled()
+
+    /** The permission can be revoked between canPost() and here; losing one notification is fine. */
+    private fun post(ctx: Context, id: Int, n: android.app.Notification) = try {
+        NotificationManagerCompat.from(ctx).notify(id, n)
+    } catch (_: SecurityException) {}
 
     fun openApp(ctx: Context, route: String = "transfers"): PendingIntent = PendingIntent.getActivity(ctx, route.hashCode(),
         Intent(ctx, MainActivity::class.java).putExtra("route", route).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
@@ -86,7 +88,7 @@ object Notifier {
             .addAction(0, "Decline", action(false))
             .addAction(0, "Accept", action(true))
             .build()
-        NotificationManagerCompat.from(ctx).notify(ID_INCOMING, n)
+        post(ctx, ID_INCOMING, n)
     }
 
     fun clearIncoming(ctx: Context) = NotificationManagerCompat.from(ctx).cancel(ID_INCOMING)
@@ -109,6 +111,6 @@ object Notifier {
             .setContentIntent(openApp(ctx))
             .setAutoCancel(true)
             .build()
-        NotificationManagerCompat.from(ctx).notify(t.id.hashCode(), n)
+        post(ctx, t.id.hashCode(), n)
     }
 }
