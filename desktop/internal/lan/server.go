@@ -319,16 +319,17 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{})
 		return
 	}
-	if r.ContentLength < 0 {
-		fail(w, 411, "Content-Length required")
-		return
-	}
 	offset, _ := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
 	if offset != 0 && offset != f.received.Load() {
 		writeJSON(w, 409, map[string]int64{"offset": f.received.Load()})
 		return
 	}
-	if offset+r.ContentLength > f.size {
+	// Stock LocalSend streams uploads chunked (no Content-Length): expect exactly the rest of the file.
+	length, chunked := r.ContentLength, r.ContentLength < 0
+	if chunked {
+		length = f.size - offset
+	}
+	if offset+length > f.size {
 		fail(w, 400, "More data than declared")
 		return
 	}
@@ -339,7 +340,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	defer f.busy.Store(false)
 	sess.lastActivity.Store(time.Now().UnixMilli())
 	s.host.RecvStatus(sess.transferID, "transferring", "")
-	if err := s.receive(r, sess, f, offset); err != nil {
+	if err := s.receive(r, sess, f, offset, length, chunked); err != nil {
 		if sess.cancelled.Load() {
 			s.cleanup(sess)
 		} else if errors.Is(err, errChecksum) {
@@ -357,7 +358,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 
 var errChecksum = errors.New("checksum mismatch")
 
-func (s *Server) receive(r *http.Request, sess *session, f *rfile, offset int64) error {
+func (s *Server) receive(r *http.Request, sess *session, f *rfile, offset, length int64, chunked bool) error {
 	if f.tmp == "" {
 		dir := filepath.Join(append([]string{sess.dir}, f.dirs...)...)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -394,7 +395,7 @@ func (s *Server) receive(r *http.Request, sess *session, f *rfile, offset int64)
 	}
 	f.received.Store(offset)
 	buf := make([]byte, 256<<10)
-	left := r.ContentLength
+	left := length
 	lastReport := time.Now()
 	for left > 0 {
 		if sess.cancelled.Load() {
@@ -425,6 +426,11 @@ func (s *Server) receive(r *http.Request, sess *session, f *rfile, offset int64)
 		}
 	}
 	s.host.RecvProgress(sess.transferID, f.id, f.received.Load())
+	if chunked {
+		if n, _ := r.Body.Read(buf[:1]); n > 0 {
+			return errors.New("more data than declared")
+		}
+	}
 	if f.received.Load() < f.size {
 		return nil // more parts follow (resumed upload)
 	}

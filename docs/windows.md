@@ -74,7 +74,7 @@ Requirements: Go 1.26, Node.js 22, [Wails](https://wails.io) v2.16 (`go install 
 ```bash
 cd desktop
 wails build -clean
-"C:/Program Files (x86)/Inno Setup 6/ISCC.exe" /DAppVersion=1.6.0 build/windows/installer.iss
+"C:/Program Files (x86)/Inno Setup 6/ISCC.exe" /DAppVersion=1.6.1 build/windows/installer.iss
 ```
 
 This writes `build/bin/FerryDesktop.exe` and the installer `build/bin/Ferry-setup.exe`. For UI work, `npm run dev` in `desktop/frontend` runs the interface in a browser with a stand-in for the Windows engine.
