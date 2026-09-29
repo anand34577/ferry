@@ -40,14 +40,9 @@ class MainActivity : ComponentActivity() {
         intent ?: return
         intent.getStringExtra("route")?.let { Nav.pending.value = it }
         when (intent.action) {
-            Intent.ACTION_SEND -> {
-                val uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
-                if (uri != null) queue(listOf(uri))
-                else intent.getStringExtra(Intent.EXTRA_TEXT)?.let { toast(this, "Ferry sends files. Share a file or photo instead of text.") }
-            }
-            Intent.ACTION_SEND_MULTIPLE -> {
-                val uris = IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
-                queue(uris)
+            Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> {
+                val uris = Storage.sharedUris(this, intent)
+                if (uris.isEmpty()) toast(this, "Nothing to send in that share.") else queue(uris)
             }
             Intent.ACTION_VIEW -> intent.data?.let { data ->
                 val connect = { lifecycleScope.launch { handleScanned(data.toString())?.let { toast(this@MainActivity, it) } } }

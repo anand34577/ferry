@@ -36,11 +36,7 @@ class MainActivity : ComponentActivity() {
     private fun handle(intent: Intent?) {
         intent ?: return
         intent.getStringExtra("route")?.let { Nav.pending.value = it }
-        val uris = when (intent.action) {
-            Intent.ACTION_SEND -> listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
-            Intent.ACTION_SEND_MULTIPLE -> IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
-            else -> return
-        }
+        val uris = Storage.sharedUris(this, intent)
         val files = uris.mapNotNull { Storage.describe(this, it) }
         if (files.size < uris.size) toast(this, "${uris.size - files.size} file(s) couldn't be opened.")
         if (files.isEmpty()) return

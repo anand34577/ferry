@@ -17,6 +17,7 @@ import dev.ferry.app.server.CancelledException
 import dev.ferry.app.server.ServerManager
 import dev.ferry.app.server.StreamBody
 import dev.ferry.app.server.hashPrefix
+import dev.ferry.app.server.linkUrl
 import dev.ferry.app.util.hex
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -430,9 +431,10 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
     /** Uploads files to my server and creates a share link (works for people without the app). */
     fun shareAsLink(files: List<TFile>, expiresIn: Long, maxDownloads: Int, password: String?, waitForWifi: Boolean = false): String {
         val t = newTransfer(true, Method.LINK, "Link", files, TStatus.CREATED)
-        retryable[t.id] = { shareAsLink(files, expiresIn, maxDownloads, password) }
+        retryable[t.id] = { shareAsLink(files, expiresIn, maxDownloads, password, waitForWifi) }
         runUpload(t.id, waitForWifi, "link:${t.id}") { api, ids ->
-            finish(t.id, TStatus.COMPLETED, shareUrl = api.createShare(ids, emptyList(), expiresIn, maxDownloads, password).getString("url"))
+            status(t.id, TStatus.TRANSFERRING, "Creating link…")
+            finish(t.id, TStatus.COMPLETED, shareUrl = api.createShare(ids, emptyList(), expiresIn, maxDownloads, password).linkUrl())
         }
         return t.id
     }
