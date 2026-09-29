@@ -143,9 +143,12 @@ fun Panel(modifier: Modifier = Modifier, color: Color = Tv.surface, padding: Dp 
 }
 
 @Composable
-fun Action(text: String, icon: ImageVector? = null, modifier: Modifier = Modifier, primary: Boolean = true, enabled: Boolean = true, onClick: () -> Unit) {
+fun Action(text: String, icon: ImageVector? = null, modifier: Modifier = Modifier, primary: Boolean = true, enabled: Boolean = true, loading: Boolean = false, onClick: () -> Unit) {
     val inner: @Composable RowScope.() -> Unit = {
-        if (icon != null) {
+        if (loading) {
+            androidx.compose.material3.CircularProgressIndicator(Modifier.size(ButtonDefaults.IconSize), strokeWidth = 2.dp)
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+        } else if (icon != null) {
             Icon(icon, null, Modifier.size(ButtonDefaults.IconSize))
             Spacer(Modifier.width(ButtonDefaults.IconSpacing))
         }
@@ -297,6 +300,20 @@ fun TvDialog(onDismiss: () -> Unit, width: Dp = 520.dp, content: @Composable Col
         }
     }
 }
+
+/** Inline spinner + label for screens that are fetching something. */
+@Composable
+fun Loading(text: String, modifier: Modifier = Modifier) {
+    Row(modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        androidx.compose.material3.CircularProgressIndicator(Modifier.size(28.dp), color = Tv.primary, strokeWidth = 3.dp)
+        Spacer(Modifier.width(14.dp))
+        Text(text, style = MaterialTheme.typography.titleMedium, color = Tv.muted)
+    }
+}
+
+/** Blocking spinner card for one-shot actions (connect, add server). */
+@Composable
+fun WorkingDialog(text: String) = TvDialog({}, width = 360.dp) { Loading(text) }
 
 @Composable
 fun ConfirmDialog(title: String, text: String, confirm: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {

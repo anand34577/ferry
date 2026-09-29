@@ -81,6 +81,7 @@ import dev.ferry.app.FerryApp
 import dev.ferry.app.data.ServerProfile
 import dev.ferry.app.server.ApiException
 import dev.ferry.app.server.ServerApi
+import dev.ferry.app.server.linkUrl
 import dev.ferry.app.server.ServerManager
 import dev.ferry.app.server.ServerState
 import dev.ferry.app.transfer.Storage
@@ -162,7 +163,7 @@ private fun LoginForm(p: ServerProfile, reason: String) {
             }
             if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 10.dp))
             Spacer(Modifier.height(16.dp))
-            BigButton(if (busy) "Signing in…" else "Sign in", modifier = Modifier.fillMaxWidth(), enabled = !busy && email.isNotBlank() && pw.isNotEmpty() && (!needCode || code.length == 6)) {
+            BigButton(if (busy) "Signing in…" else "Sign in", modifier = Modifier.fillMaxWidth(), enabled = !busy && email.isNotBlank() && pw.isNotEmpty() && (!needCode || code.length == 6), loading = busy) {
                 busy = true; error = ""
                 scope.launch {
                     try {
@@ -182,14 +183,17 @@ private fun LoginForm(p: ServerProfile, reason: String) {
                 if (email.isBlank()) { error = "Enter your email above, then tap “Forgot password?” again."; return@TextButton }
                 error = ""; notice = ""
                 scope.launch {
+                    busy = true
                     try {
                         withContext(Dispatchers.IO) { ServerApi(p.url, null).post("/api/v1/auth/forgot", JSONObject().put("email", email.trim())) }
                         notice = "If an account exists for ${email.trim()}, a link to reset the password is on its way. It works for one hour."
                     } catch (e: Exception) {
                         error = ServerManager.friendly(e)
+                    } finally {
+                        busy = false
                     }
                 }
-            }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Forgot password?") }
+            }, enabled = !busy, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Forgot password?") }
         }
     }
 }
@@ -210,6 +214,7 @@ private fun FilesTab() {
     var reload by remember { mutableIntStateOf(0) }
     var shareFor by remember { mutableStateOf<JSONObject?>(null) }
     var deleteFor by remember { mutableStateOf<JSONObject?>(null) }
+    var working by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(folder, reload) {
         loading = true
@@ -301,11 +306,14 @@ private fun FilesTab() {
         LinkOptionsDialog(onDismiss = { shareFor = null }) { exp, max, pw ->
             shareFor = null
             scope.launch {
+                working = "Creating link…"
                 try {
-                    val url = withContext(Dispatchers.IO) { app.server.api()!!.createShare(listOf(f.getString("id")), emptyList(), exp, max, pw).getString("url") }
+                    val url = withContext(Dispatchers.IO) { app.server.api()!!.createShare(listOf(f.getString("id")), emptyList(), exp, max, pw).linkUrl() }
                     shareText(ctx, url)
                 } catch (e: Exception) {
                     toast(ctx, ServerManager.friendly(e))
+                } finally {
+                    working = null
                 }
             }
         }
@@ -319,8 +327,10 @@ private fun FilesTab() {
                 Button({
                     deleteFor = null
                     scope.launch {
+                        working = "Deleting…"
                         runCatching { withContext(Dispatchers.IO) { app.server.api()!!.delete("/api/v1/files/${f.getString("id")}") } }
                             .onFailure { toast(ctx, ServerManager.friendly(it)) }
+                        working = null
                         reload++
                     }
                 }) { Text("Delete") }
@@ -328,6 +338,7 @@ private fun FilesTab() {
             dismissButton = { TextButton({ deleteFor = null }) { Text("Cancel") } },
         )
     }
+    working?.let { WorkingDialog(it) }
 }
 
 // ---------- links ----------
@@ -341,17 +352,25 @@ private fun LinksTab() {
     var reload by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf("") }
     var newUpload by remember { mutableStateOf(false) }
+    val shortener = ((app.server.state.collectAsState().value as? ServerState.Online)?.capabilities ?: emptySet()).contains("shortener")
+    var loading by remember { mutableStateOf(true) }
+    var working by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(reload) {
+        loading = true
         try {
             val a = withContext(Dispatchers.IO) { app.server.api()!!.get("/api/v1/shares").getJSONArray("shares") }
             shares = (0 until a.length()).map { a.getJSONObject(it) }
             error = ""
         } catch (e: Exception) {
             error = ServerManager.friendly(e)
+        } finally {
+            loading = false
         }
     }
-    fun act(block: suspend () -> Unit) = scope.launch {
+    fun act(label: String = "Updating…", block: suspend () -> Unit) = scope.launch {
+        working = label
         runCatching { withContext(Dispatchers.IO) { block() } }.onFailure { toast(ctx, ServerManager.friendly(it)) }
+        working = null
         reload++
     }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -359,7 +378,8 @@ private fun LinksTab() {
             OutlinedButton({ newUpload = true }, Modifier.padding(vertical = 12.dp)) { Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(6.dp)); Text("New upload link") }
         }
         if (error.isNotEmpty()) item { Text(error, color = MaterialTheme.colorScheme.error) }
-        if (shares.isEmpty() && error.isEmpty()) item { EmptyState(Icons.Outlined.Link, "No links yet", "Links you create from this phone or the web appear here.") }
+        if (loading && shares.isEmpty()) item { Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
+        if (!loading && shares.isEmpty() && error.isEmpty()) item { EmptyState(Icons.Outlined.Link, "No links yet", "Links you create from this phone or the web appear here.") }
         items(shares, key = { it.getString("id") }) { s ->
             val status = s.optString("status")
             Panel(Modifier.padding(bottom = 8.dp)) {
@@ -374,9 +394,10 @@ private fun LinksTab() {
                     val ex = LocalExtra.current
                     if (status == "active") Chip("Active", ex.ok, ex.okSoft) else Chip(status.replaceFirstChar { it.uppercase() })
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
-                    TextButton({ copyText(ctx, s.getString("url")) }) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Copy") }
-                    TextButton({ shareText(ctx, s.getString("url")) }) { Icon(Icons.Outlined.Share, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Share") }
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+                    TextButton({ copyText(ctx, s.linkUrl()) }) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Copy") }
+                    TextButton({ shareText(ctx, s.linkUrl()) }) { Icon(Icons.Outlined.Share, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Share") }
+                    if (shortener && !s.optBoolean("revoked")) TextButton({ act("Creating short link…") { app.server.api()!!.post("/api/v1/shares/${s.getString("id")}/shorten", JSONObject()) } }) { Text(if (s.optString("shortUrl").isEmpty()) "Short link" else "New short") }
                     if (!s.optBoolean("revoked")) TextButton({ act { app.server.api()!!.patch("/api/v1/shares/${s.getString("id")}", JSONObject().put("revoked", true)) } }) { Text("Disable") }
                     else TextButton({ act { app.server.api()!!.patch("/api/v1/shares/${s.getString("id")}", JSONObject().put("revoked", false)) } }) { Text("Enable") }
                     TextButton({ act { app.server.api()!!.delete("/api/v1/shares/${s.getString("id")}") } }) { Icon(Icons.Outlined.Delete, "Delete link", Modifier.size(16.dp)) }
@@ -400,8 +421,10 @@ private fun LinksTab() {
                 Button({
                     newUpload = false
                     scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { app.server.api()!!.createUploadLink(name.ifBlank { "Upload link" }, 7 * 86400L).getString("url") } }
+                        working = "Creating link…"
+                        runCatching { withContext(Dispatchers.IO) { app.server.api()!!.createUploadLink(name.ifBlank { "Upload link" }, 7 * 86400L).linkUrl() } }
                             .onSuccess { shareText(ctx, it) }.onFailure { toast(ctx, ServerManager.friendly(it)) }
+                        working = null
                         reload++
                     }
                 }) { Text("Create") }
@@ -409,6 +432,7 @@ private fun LinksTab() {
             dismissButton = { TextButton({ newUpload = false }) { Text("Cancel") } },
         )
     }
+    working?.let { WorkingDialog(it) }
 }
 
 // ---------- devices ----------
@@ -422,12 +446,17 @@ private fun DevicesTab(nav: NavHostController) {
     var reload by remember { mutableIntStateOf(0) }
     var revoke by remember { mutableStateOf<JSONObject?>(null) }
     var rename by remember { mutableStateOf<JSONObject?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var working by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(reload) {
+        loading = true
         runCatching { withContext(Dispatchers.IO) { app.server.api()!!.get("/api/v1/devices").getJSONArray("devices") } }
             .onSuccess { a -> devices = (0 until a.length()).map { a.getJSONObject(it) } }
+        loading = false
     }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item { SectionTitle("Signed in to your account") }
+        if (loading && devices.isEmpty()) item { Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
         items(devices, key = { it.getString("id") }) { d ->
             Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.Smartphone, null, tint = MaterialTheme.colorScheme.primary)
@@ -457,8 +486,10 @@ private fun DevicesTab(nav: NavHostController) {
                 Button({
                     rename = null
                     scope.launch {
+                        working = "Saving…"
                         runCatching { withContext(Dispatchers.IO) { app.server.api()!!.patch("/api/v1/devices/${d.getString("id")}", JSONObject().put("name", name)) } }
                             .onFailure { toast(ctx, ServerManager.friendly(it)) }
+                        working = null
                         if (d.optBoolean("current")) app.prefs.alias = name
                         reload++
                     }
@@ -476,7 +507,9 @@ private fun DevicesTab(nav: NavHostController) {
                 Button({
                     revoke = null
                     scope.launch {
+                        working = "Removing…"
                         runCatching { withContext(Dispatchers.IO) { app.server.api()!!.delete("/api/v1/devices/${d.getString("id")}") } }.onFailure { toast(ctx, ServerManager.friendly(it)) }
+                        working = null
                         reload++
                     }
                 }) { Text("Remove") }
@@ -484,6 +517,7 @@ private fun DevicesTab(nav: NavHostController) {
             dismissButton = { TextButton({ revoke = null }) { Text("Cancel") } },
         )
     }
+    working?.let { WorkingDialog(it) }
 }
 
 // ---------- server profiles ----------
@@ -534,7 +568,7 @@ fun ServersScreen(nav: NavHostController) {
                         shape = RoundedCornerShape(16.dp))
                     if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 10.dp))
                     Spacer(Modifier.height(16.dp))
-                    BigButton(if (busy) "Checking…" else "Test & add", modifier = Modifier.fillMaxWidth(), enabled = !busy && url.isNotBlank()) {
+                    BigButton(if (busy) "Checking…" else "Test & add", modifier = Modifier.fillMaxWidth(), enabled = !busy && url.isNotBlank(), loading = busy) {
                         busy = true; error = ""
                         scope.launch {
                             try {
