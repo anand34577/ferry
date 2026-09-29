@@ -78,6 +78,7 @@ fun SendScreen(onPickFromFiles: () -> Unit, onStarted: () -> Unit) {
     val trusted by app.prefs.trusted.collectAsState()
     var myDevices by remember { mutableStateOf<List<MyDevice>>(emptyList()) }
     var enterCode by remember { mutableStateOf(false) }
+    var connecting by remember { mutableStateOf(false) }
     var confirmLink by remember { mutableStateOf(false) }
     val picker = remember { hasPicker(ctx) }
     val total = files.sumOf { it.size }
@@ -183,14 +184,18 @@ fun SendScreen(onPickFromFiles: () -> Unit, onStarted: () -> Unit) {
         confirm = "Connect", keyboard = KeyboardType.Ascii, onDismiss = { enterCode = false }) { input ->
         enterCode = false
         scope.launch {
+            connecting = true
             try {
                 val p = connectInput(input)
                 toast(ctx, "Found ${p.alias}" + if (files.isEmpty()) " — now choose files to send" else "")
             } catch (e: Exception) {
                 toast(ctx, e.message ?: "Couldn't connect")
+            } finally {
+                connecting = false
             }
         }
     }
+    if (connecting) WorkingDialog("Connecting…")
     if (confirmLink) ConfirmDialog("Create a link?", "Uploads ${formatBytes(total)} to your server. Anyone with the link can download for 7 days. " +
         "The link appears as a QR code under Transfers, ready to scan with a phone.", "Create link", { confirmLink = false }) {
         confirmLink = false

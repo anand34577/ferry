@@ -424,7 +424,7 @@ fun QrImage(value: String, size: Dp = 200.dp) {
 
 /** Big primary action button (56dp, fully rounded). */
 @Composable
-fun BigButton(text: String, icon: ImageVector? = null, modifier: Modifier = Modifier, enabled: Boolean = true, tonal: Boolean = false, onClick: () -> Unit) {
+fun BigButton(text: String, icon: ImageVector? = null, modifier: Modifier = Modifier, enabled: Boolean = true, tonal: Boolean = false, loading: Boolean = false, onClick: () -> Unit) {
     val bg = when {
         !enabled -> MaterialTheme.colorScheme.surfaceVariant
         tonal -> MaterialTheme.colorScheme.primaryContainer
@@ -439,10 +439,26 @@ fun BigButton(text: String, icon: ImageVector? = null, modifier: Modifier = Modi
         modifier.heightIn(min = 56.dp).clip(RoundedCornerShape(50)).background(bg).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 24.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center,
     ) {
-        if (icon != null) {
+        if (loading) {
+            androidx.compose.material3.CircularProgressIndicator(Modifier.size(20.dp), color = fg, strokeWidth = 2.dp); Spacer(Modifier.width(10.dp))
+        } else if (icon != null) {
             Icon(icon, null, tint = fg, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(10.dp))
         }
         Text(text, color = fg, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** Blocking "working…" card with a spinner, for one-shot server actions (create link, delete, rename). */
+@Composable
+fun WorkingDialog(text: String) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = {}) {
+        Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) {
+            Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
+                Spacer(Modifier.width(16.dp))
+                Text(text, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
     }
 }
 
