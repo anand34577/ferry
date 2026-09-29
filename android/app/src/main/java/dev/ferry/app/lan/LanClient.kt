@@ -36,7 +36,8 @@ object LanClient {
             }
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
         }
-        val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), SecureRandom()) }
+        // Current LocalSend requires a client certificate (mTLS) and uses it as the sender's identity.
+        val ssl = SSLContext.getInstance("TLS").apply { init(identityKeyManagers(), arrayOf(tm), SecureRandom()) }
         return OkHttpClient.Builder()
             .sslSocketFactory(ssl.socketFactory, tm)
             .hostnameVerifier { _, _ -> true } // identity is the pinned fingerprint, not a hostname
@@ -44,6 +45,20 @@ object LanClient {
             .readTimeout(readTimeoutSec, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .build()
+    }
+
+    /** Always offers our own certificate: the default key manager would drop it because its issuer isn't one the server lists. */
+    private fun identityKeyManagers(): Array<javax.net.ssl.KeyManager>? {
+        val certs = runCatching { dev.ferry.app.FerryApp.app.certs }.getOrNull() ?: return null
+        return arrayOf(object : javax.net.ssl.X509ExtendedKeyManager() {
+            override fun getClientAliases(t: String?, i: Array<out java.security.Principal>?) = arrayOf("lan")
+            override fun chooseClientAlias(t: Array<out String>?, i: Array<out java.security.Principal>?, s: java.net.Socket?) = "lan"
+            override fun chooseEngineClientAlias(t: Array<out String>?, i: Array<out java.security.Principal>?, e: javax.net.ssl.SSLEngine?) = "lan"
+            override fun getServerAliases(t: String?, i: Array<out java.security.Principal>?): Array<String>? = null
+            override fun chooseServerAlias(t: String?, i: Array<out java.security.Principal>?, s: java.net.Socket?): String? = null
+            override fun getCertificateChain(alias: String?) = arrayOf(certs.cert)
+            override fun getPrivateKey(alias: String?) = certs.privateKey
+        })
     }
 
     private fun check(r: okhttp3.Response): String {

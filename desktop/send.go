@@ -78,7 +78,7 @@ func friendlyPeer(err error, alias string) error {
 	case errors.As(err, &pe):
 		return pe
 	case errors.As(err, &ne):
-		return fmt.Errorf("couldn't connect to %s. Make sure it's on the same network with Ferry or LocalSend open, and that the network allows devices to see each other", alias)
+		return fmt.Errorf("couldn't connect to %s (%v). Make sure it's on the same network with Ferry or LocalSend open, and that the network allows devices to see each other", alias, err)
 	}
 	return fmt.Errorf("couldn't reach %s (%v)", alias, err)
 }
@@ -199,12 +199,18 @@ func (a *App) runDirect(id string, peer lan.Peer, fallbackDevice string, st *dir
 		a.store.finish(id, stCompleted, "")
 		a.notify("Sent to "+peer.Alias, summary(a.store, id))
 	case c.paused:
+		if st.session != "" {
+			c.cancelPeer = func() { lan.Cancel(peer, st.session) }
+		}
 		a.store.update(id, func(t *Transfer) { t.Status, t.Paused, t.Speed, t.Note = stInterrupted, true, 0, "Paused" })
 	case ctx.Err() != nil || errors.Is(err, errCancelled):
 		if st.session != "" {
 			lan.Cancel(peer, st.session)
 		}
 		a.store.finish(id, stCancelled, "Cancelled")
+	case errors.As(err, &pe) && pe.Status == 403 && st.session != "":
+		// The receiver dropped the session (its user cancelled): nothing more to send, nothing to tell it.
+		a.store.finish(id, stCancelled, peer.Alias+" cancelled the transfer.")
 	case errors.As(err, &pe) && pe.Status == 403:
 		a.store.finish(id, stRejected, peer.Alias+" declined the files.")
 	case errors.As(err, &pe) && pe.Status == 409 && st.session == "":
@@ -212,6 +218,10 @@ func (a *App) runDirect(id string, peer lan.Peer, fallbackDevice string, st *dir
 	case errors.As(err, &pe) && strings.Contains(strings.ToLower(pe.Message), "checksum"):
 		a.store.finish(id, stFailed, "The file arrived corrupted (checksum mismatch). Please retry.")
 	default:
+		a.log.Warn("direct send failed", "peer", peer.Alias, "addr", peer.BaseURL(), "err", err)
+		if st.session != "" { // free the receiver: LocalSend accepts one session at a time
+			lan.Cancel(peer, st.session)
+		}
 		why := friendlyPeer(err, peer.Alias).Error() + "."
 		if fallbackDevice != "" && st.session == "" && a.online {
 			a.store.update(id, func(t *Transfer) { t.Method, t.Note = "server", why+" Sending through your server instead." })
@@ -238,6 +248,10 @@ func (a *App) sendFile(ctx context.Context, id string, peer lan.Peer, st *direct
 		var offset int64
 		if resuming && peer.Ferry {
 			o, err := lan.Offset(ctx, peer, st.session, f.ID, token)
+			var pe *lan.PeerError
+			if errors.As(err, &pe) && (pe.Status == 403 || pe.Status == 404) {
+				return "", err // the session is gone
+			}
 			if err == nil {
 				offset = o
 			}

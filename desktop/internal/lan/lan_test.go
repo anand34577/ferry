@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -185,5 +189,32 @@ func TestSafeName(t *testing.T) {
 		if got := SafeName(in); got != want {
 			t.Errorf("SafeName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Current LocalSend refuses clients that present no certificate.
+func TestClientPresentsCertificate(t *testing.T) {
+	id, err := LoadIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srvID, _ := LoadIdentity(t.TempDir())
+	clientCert.Store(&id.Cert) // LoadIdentity of the second identity replaced it
+	var got string
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{srvID.Cert}, ClientAuth: tls.RequireAnyClientCert,
+		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error { got = FingerprintOf(raw[0]); return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, Info{Alias: "x", Fingerprint: "F"}) })}
+	go srv.Serve(ln)
+	defer srv.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	yes := true
+	if _, err := FetchInfo(context.Background(), "127.0.0.1", port, "", "manual", &yes, 5e9); err != nil {
+		t.Fatal(err)
+	}
+	if got != id.Fingerprint {
+		t.Fatalf("server saw client cert %q, want %q", got, id.Fingerprint)
 	}
 }

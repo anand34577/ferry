@@ -27,6 +27,7 @@ class Certs(ctx: Context) {
     private val pass = "ferry".toCharArray() // file is app-private; the password only satisfies the PKCS12 format
     private val ks: KeyStore = load()
     val cert: X509Certificate = ks.getCertificate("lan") as X509Certificate
+    val privateKey: java.security.PrivateKey get() = ks.getKey("lan", pass) as java.security.PrivateKey
     val fingerprint: String = MessageDigest.getInstance("SHA-256").digest(cert.encoded).hex().uppercase()
 
     private fun load(): KeyStore {

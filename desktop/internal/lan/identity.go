@@ -26,6 +26,14 @@ type Identity struct {
 
 // LoadIdentity reads the certificate from dir, creating it on first use.
 func LoadIdentity(dir string) (*Identity, error) {
+	id, err := loadIdentity(dir)
+	if err == nil {
+		clientCert.Store(&id.Cert)
+	}
+	return id, err
+}
+
+func loadIdentity(dir string) (*Identity, error) {
 	certPath, keyPath := filepath.Join(dir, "lan-cert.pem"), filepath.Join(dir, "lan-key.pem")
 	if c, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
 		return &Identity{Cert: c, Fingerprint: FingerprintOf(c.Certificate[0])}, nil
@@ -37,7 +45,7 @@ func LoadIdentity(dir string) (*Identity, error) {
 	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 63))
 	now := time.Now()
 	tmpl := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "Ferry"}, NotBefore: now.Add(-24 * time.Hour),
-		NotAfter: now.AddDate(10, 0, 0), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+		NotAfter: now.AddDate(10, 0, 0), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
 		return nil, err

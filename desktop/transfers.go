@@ -66,6 +66,8 @@ type control struct {
 	paused  bool
 	restart func() // resumes a paused transfer in place
 	retry   func() // starts it again as a new transfer
+	// cancelPeer tells a direct receiver we gave up (set while a paused direct send holds a session).
+	cancelPeer func()
 }
 
 // store holds active transfers and history and pushes changes to the UI (at most every 200 ms).
