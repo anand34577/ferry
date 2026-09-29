@@ -119,3 +119,5 @@ Users can add their own [Gotify](https://gotify.net) server and application toke
 ## URL shortener
 
 In **Admin → Settings → Short links** (or with `FERRY_SHORTENER_URL` and `FERRY_SHORTENER_TOKEN`), enter your Shortr address and an API key (a [Shortr](https://github.com/anand34577/shortr) API key with `links:write`) and every new link also gets a short URL, shown and copied by default. Regenerating or deleting a link removes its short URL too; links made earlier get one from Links → ⋯ → Create short link. If the shortener is unreachable, links still work with their full address.
+
+Shortr must be able to accept your Ferry address as a link target. By default it rejects `localhost` and private-network addresses (`SHORTR_ALLOW_PRIVATE_TARGETS`), so short links for a LAN-only Ferry fail unless that is enabled on the Shortr side. Use the Shortr address that serves the API (its public port, if you run separate ports). Names longer than 200 characters are shortened to fit Shortr's title limit.
