@@ -1,5 +1,21 @@
 package dev.ferry.app.ui
 
+import androidx.compose.foundation.IndicationNodeFactory
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.FocusInteraction
+import androidx.compose.foundation.interaction.InteractionSource
+import androidx.compose.material3.ripple
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.node.DelegatableNode
+import androidx.compose.ui.node.DelegatingNode
+import androidx.compose.ui.node.DrawModifierNode
+import androidx.compose.ui.node.invalidateDraw
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
@@ -53,7 +69,7 @@ fun FerryTheme(mode: String, content: @Composable () -> Unit) {
         labelLarge = base.labelLarge.copy(fontWeight = FontWeight.SemiBold),
         bodySmall = base.bodySmall.copy(fontSize = 12.5.sp),
     )
-    androidx.compose.runtime.CompositionLocalProvider(
+    CompositionLocalProvider(
         LocalExtra provides if (dark) Extra(Color(0xFF4CCF93), Color(0xFF10271D), Color(0xFFF0B44C), Color(0xFF2E2310))
         else Extra(Color(0xFF0F7B4F), Color(0xFFE3F5EC), Color(0xFF9A5B00), Color(0xFFFFF1D6))
     ) {
@@ -61,7 +77,38 @@ fun FerryTheme(mode: String, content: @Composable () -> Unit) {
             colorScheme = if (dark) Dark else Light,
             typography = type,
             shapes = Shapes(small = RoundedCornerShape(10.dp), medium = RoundedCornerShape(14.dp), large = RoundedCornerShape(18.dp)),
-            content = content,
+            content = { CompositionLocalProvider(LocalIndication provides FocusRing(MaterialTheme.colorScheme.onBackground), content = content) },
         )
+    }
+}
+
+/** Ripple plus a clear outline on D-pad/keyboard focus: the ripple's faint focus tint is invisible from a sofa. */
+private class FocusRing(private val color: Color) : IndicationNodeFactory {
+    override fun create(interactionSource: InteractionSource): DelegatableNode = Node(interactionSource, color)
+    override fun equals(other: Any?) = other is FocusRing && other.color == color
+    override fun hashCode() = color.hashCode()
+
+    private class Node(private val source: InteractionSource, private val color: Color) : DelegatingNode(), DrawModifierNode {
+        private var focused = false
+
+        init { delegate(ripple().create(source)) }
+
+        override fun onAttach() {
+            coroutineScope.launch {
+                source.interactions.collect {
+                    if (it is FocusInteraction.Focus) focused = true else if (it is FocusInteraction.Unfocus) focused = false else return@collect
+                    invalidateDraw()
+                }
+            }
+        }
+
+        override fun ContentDrawScope.draw() {
+            drawContent()
+            if (!focused) return
+            // ponytail: shape-agnostic rounded ring; clickables are clipped to their own shape so it stays inside.
+            val w = 3.dp.toPx()
+            val r = minOf(24.dp.toPx(), size.minDimension / 2)
+            drawRoundRect(color, Offset(w / 2, w / 2), Size(size.width - w, size.height - w), CornerRadius(r), Stroke(w))
+        }
     }
 }

@@ -8,15 +8,18 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -110,10 +113,11 @@ fun FerryRoot() {
             ) { r -> if (r != route) nav.navigate(r) { popUpTo("home"); launchSingleTop = true } }
         },
     ) { pad ->
-        NavHost(
+        // ponytail: one centred column caps line length on tablets and TVs; add two-pane layouts if wide screens need more.
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) { NavHost(
             nav, startDestination = "home",
             // Tab screens scroll behind the floating nav bar; they reserve space at the end of their content.
-            modifier = if (route in TABS) Modifier.padding(top = pad.calculateTopPadding()) else Modifier.padding(pad),
+            modifier = (if (route in TABS) Modifier.padding(top = pad.calculateTopPadding()) else Modifier.padding(pad)).widthIn(max = 720.dp).fillMaxSize(),
             enterTransition = { fadeIn(androidx.compose.animation.core.tween(180)) },
             exitTransition = { fadeOut(androidx.compose.animation.core.tween(120)) },
         ) {
@@ -126,7 +130,7 @@ fun FerryRoot() {
             composable("settings") { SettingsScreen(nav) }
             composable("trusted") { TrustedScreen(nav) }
             composable("scan") { QrScanScreen(nav) }
-        }
+        } }
     }
     IncomingSheet()
     PinDialog()

@@ -1,8 +1,10 @@
 package dev.ferry.app.ui
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.activity.result.ActivityResultLauncher
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
@@ -499,6 +501,19 @@ fun copyText(ctx: Context, text: String, label: String = "Link") {
 fun shareText(ctx: Context, text: String) {
     ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), "Share link")
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}
+
+/** Opens the system file picker; many Android TVs ship without one. */
+fun ActivityResultLauncher<Array<String>>.pickFiles(ctx: Context) {
+    val picker = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+    try {
+        // Android TV's framework stubs claim the intent but only show a generic "no app" toast.
+        val pkg = picker.resolveActivity(ctx.packageManager)?.packageName
+        if (pkg == null || pkg == "com.android.tv.frameworkpackagestubs") throw ActivityNotFoundException()
+        launch(arrayOf("*/*"))
+    } catch (_: ActivityNotFoundException) {
+        toast(ctx, "This device has no file picker. Install a file manager, or share files to Ferry from another app.")
+    }
 }
 
 fun toast(ctx: Context, text: String) = Toast.makeText(ctx, text, Toast.LENGTH_LONG).show()

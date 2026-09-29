@@ -87,6 +87,14 @@ fun QrScanScreen(nav: NavHostController) {
     val handled = remember { AtomicBoolean(false) }
     var status by remember { mutableStateOf("Point the camera at a Ferry QR code") }
 
+    // Android TVs and some tablets have no camera: point people at the pairing code instead.
+    if (!ctx.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+        Column(Modifier.fillMaxSize()) {
+            ScreenHeader("Scan QR code", onBack = { nav.popBackStack() })
+            EmptyState(Icons.Outlined.QrCodeScanner, "No camera on this device", "Enter the pairing code or IP address shown on the other device instead.")
+        }
+        return
+    }
     LaunchedEffect(Unit) { if (!granted) perm.launch(Manifest.permission.CAMERA) }
 
     fun onCode(text: String) {

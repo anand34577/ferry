@@ -236,7 +236,7 @@ private fun FilesTab() {
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background, contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0), floatingActionButton = {
         ExtendedFloatingActionButton(modifier = Modifier.padding(bottom = NavBarSpace - 16.dp), shape = RoundedCornerShape(50),
-            containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary, onClick = { upload.launch(arrayOf("*/*")) }, icon = { Icon(Icons.Outlined.Upload, null) }, text = { Text("Upload") })
+            containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary, onClick = { upload.pickFiles(ctx) }, icon = { Icon(Icons.Outlined.Upload, null) }, text = { Text("Upload") })
     }) { pad ->
         LazyColumn(Modifier.fillMaxSize().padding(pad).padding(horizontal = 20.dp)) {
             item {

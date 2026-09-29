@@ -160,8 +160,11 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
         val (sess, f) = authorize(s) ?: return err(Response.Status.FORBIDDEN, "Invalid session or token")
         if (f.done) return json(Response.Status.OK, JSONObject())
         if (f.busy) return err(Response.Status.CONFLICT, "Upload already in progress")
-        val len = s.headers["content-length"]?.toLongOrNull() ?: return err(Response.Status.LENGTH_REQUIRED, "Content-Length required")
+        // Stock LocalSend streams uploads chunked, with no Content-Length; NanoHTTPD doesn't decode that itself.
+        val chunked = s.headers["transfer-encoding"]?.contains("chunked", ignoreCase = true) == true
         val offset = param(s, "offset").toLongOrNull() ?: 0L
+        val len = if (chunked) f.size - offset
+            else s.headers["content-length"]?.toLongOrNull() ?: return err(Response.Status.LENGTH_REQUIRED, "Content-Length required")
         if (offset != 0L && offset != f.received) return json(Response.Status.CONFLICT, JSONObject().put("offset", f.received))
         if (offset + len > f.size) return err(Response.Status.BAD_REQUEST, "More data than declared")
         f.busy = true
@@ -173,13 +176,14 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
             val md = MessageDigest.getInstance("SHA-256")
             if (offset > 0) ctx.contentResolver.openInputStream(uri)?.use { hashPrefix(it, md, offset) }
             f.received = offset
+            val input = if (chunked) ChunkedInputStream(s.inputStream) else s.inputStream
             (if (offset == 0L) Storage.openTruncate(ctx, uri) else Storage.openAppend(ctx, uri)).use { out ->
-                val input = s.inputStream
                 val buf = ByteArray(256 * 1024)
                 var left = len
                 while (left > 0) {
                     if (sess.cancelled) throw IOException("cancelled")
                     val n = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+                    if (n < 0 && chunked) break // body ended; a short upload is caught below
                     if (n < 0) throw IOException("Connection closed")
                     out.write(buf, 0, n)
                     md.update(buf, 0, n)
@@ -189,6 +193,9 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
                     app.transfers.lanReceiveProgress(sess.transferId, f.id, f.received)
                 }
             }
+            // A chunked body's length is only known at its end: reject one that's longer or shorter than declared.
+            if (chunked && input.read() >= 0) return err(Response.Status.BAD_REQUEST, "More data than declared")
+            if (chunked && f.received != f.size) throw IOException("Upload ended early")
             if (f.received == f.size) {
                 f.sha = md.digest().hex()
                 if (f.expectedSha.isNotEmpty() && f.expectedSha != f.sha) {
@@ -263,5 +270,44 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
     private fun cleanup(sess: Session) {
         sess.files.values.filter { !it.done }.forEach { f -> f.uri?.let { Storage.delete(ctx, it) }; f.uri = null }
         if (session === sess) session = null
+    }
+}
+
+/** Decodes an HTTP/1.1 chunked request body; returns -1 after the final zero-length chunk. */
+class ChunkedInputStream(private val raw: java.io.InputStream) : java.io.InputStream() {
+    private var left = 0L
+    private var eof = false
+
+    override fun read(): Int {
+        val b = ByteArray(1)
+        return if (read(b, 0, 1) < 0) -1 else b[0].toInt() and 0xff
+    }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        if (eof) return -1
+        if (left == 0L) {
+            left = line().substringBefore(';').trim().toLongOrNull(16)?.takeIf { it >= 0 } ?: throw IOException("Bad chunk size")
+            if (left == 0L) {
+                while (line().isNotEmpty()) Unit // trailers
+                eof = true
+                return -1
+            }
+        }
+        val n = raw.read(b, off, minOf(len.toLong(), left).toInt())
+        if (n < 0) throw IOException("Connection closed")
+        left -= n
+        if (left == 0L) line() // CRLF after the chunk data
+        return n
+    }
+
+    private fun line(): String {
+        val sb = StringBuilder()
+        while (true) {
+            val c = raw.read()
+            if (c < 0) throw IOException("Connection closed")
+            if (c == '\n'.code) return sb.toString().trimEnd('\r')
+            if (sb.length > 1024) throw IOException("Chunk header too long")
+            sb.append(c.toChar())
+        }
     }
 }
