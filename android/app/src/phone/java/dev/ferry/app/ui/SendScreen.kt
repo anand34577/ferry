@@ -101,6 +101,7 @@ fun SendScreen(nav: NavHostController) {
     var gate by remember { mutableStateOf<Gate?>(null) }
     var showLink by remember { mutableStateOf(false) }
     var showManual by remember { mutableStateOf(false) }
+    var connecting by remember { mutableStateOf(false) }
     val total = files.sumOf { it.size }
     val ex = LocalExtra.current
 
@@ -288,15 +289,19 @@ fun SendScreen(nav: NavHostController) {
     }
     if (showManual) ManualConnectDialog(onDismiss = { showManual = false }, onScan = { showManual = false; nav.navigate("scan") }) { input ->
         scope.launch {
+            connecting = true
             try {
                 val p = connectInput(input)
                 showManual = false
                 toast(ctx, "Found ${p.alias}")
             } catch (e: Exception) {
                 toast(ctx, e.message ?: "Couldn't connect")
+            } finally {
+                connecting = false
             }
         }
     }
+    if (connecting) WorkingDialog("Connecting…")
 }
 
 @Composable

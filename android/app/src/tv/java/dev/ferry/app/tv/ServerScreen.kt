@@ -65,6 +65,7 @@ fun ServerScreen() {
     val profile = app.prefs.servers.collectAsState().value.find { it.id == activeId }
     var adding by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
+    var working by remember { mutableStateOf(false) }
 
     Page(profile?.name ?: "Server", profile?.let { p -> listOfNotNull(p.url, p.email.takeIf { it.isNotEmpty() && p.signedIn }).joinToString(" · ") }
         ?: "Optional: your self-hosted Ferry server", actions = {
@@ -80,7 +81,7 @@ fun ServerScreen() {
                     "Nearby transfers work without one. Add your Ferry server to download your files on this TV, send to your devices anywhere and create links.")
                 Action("Add server", Icons.Rounded.Add, Modifier.padding(start = 4.dp).focusRequester(rememberInitialFocus())) { adding = true }
             }
-            ServerState.Checking -> Text("Connecting…", style = MaterialTheme.typography.titleLarge, color = Tv.muted)
+            ServerState.Checking -> Loading("Connecting…")
             is ServerState.Offline -> Column {
                 Empty(Icons.Rounded.CloudOff, "Server unavailable", s.reason + "\nNearby transfers still work.")
                 Action("Try again", Icons.Rounded.Refresh, Modifier.focusRequester(rememberInitialFocus())) { app.server.refresh() }
@@ -95,13 +96,17 @@ fun ServerScreen() {
         confirm = "Add", keyboard = KeyboardType.Uri, onDismiss = { adding = false }) { url ->
         adding = false
         scope.launch {
+            working = true
             try {
                 app.server.addServer(url, "")
             } catch (e: Exception) {
                 toast(ctx, ServerManager.friendly(e))
+            } finally {
+                working = false
             }
         }
     }
+    if (working) WorkingDialog("Checking server…")
     if (confirmRemove && profile != null) ConfirmDialog("Remove ${profile.name}?", "This TV forgets the server. Nothing is deleted on it.", "Remove",
         { confirmRemove = false }) { confirmRemove = false; app.server.remove(profile) }
 }
@@ -131,7 +136,7 @@ private fun SignIn(p: ServerProfile, reason: String) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done))
         if (error.isNotEmpty()) Text(error, Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodyLarge, color = Tv.danger)
         Action(if (busy) "Signing in…" else "Sign in", modifier = Modifier.padding(top = 14.dp),
-            enabled = !busy && email.isNotBlank() && pw.isNotEmpty() && (!needCode || code.length == 6)) {
+            enabled = !busy && email.isNotBlank() && pw.isNotEmpty() && (!needCode || code.length == 6), loading = busy) {
             busy = true; error = ""
             scope.launch {
                 try {
@@ -182,6 +187,7 @@ private fun ServerFiles() {
     Text((listOf("My files") + crumbs.map { it.second }).joinToString("  ›  "), Modifier.padding(bottom = 12.dp),
         style = MaterialTheme.typography.titleMedium, color = Tv.muted)
     if (error.isNotEmpty()) Text(error, style = MaterialTheme.typography.bodyLarge, color = Tv.danger)
+    if (loading && folders.isEmpty() && files.isEmpty()) Loading("Loading files…")
     if (!loading && folders.isEmpty() && files.isEmpty() && error.isEmpty()) Empty(Icons.Rounded.FolderOpen, "This folder is empty",
         "Upload files to your server from your phone or computer to watch them here.")
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 40.dp, start = 4.dp, end = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

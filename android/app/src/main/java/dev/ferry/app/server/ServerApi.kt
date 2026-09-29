@@ -320,3 +320,6 @@ fun backoff(attempt: Int, cancelled: () -> Boolean) {
         Thread.sleep(250)
     }
 }
+
+/** The link to hand out: the short URL when the server's shortener made one, else the full URL (the shortener is optional and may be down). */
+fun JSONObject.linkUrl(): String = optString("shortUrl").ifBlank { getString("url") }

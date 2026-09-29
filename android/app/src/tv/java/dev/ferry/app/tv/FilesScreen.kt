@@ -84,7 +84,7 @@ fun FilesScreen(onViewFile: (LocalFile, List<LocalFile>) -> Unit, onSend: () -> 
             }
         }
         when {
-            files == null -> Text("Loading…", color = Tv.muted, style = MaterialTheme.typography.titleMedium)
+            files == null -> Loading("Loading files…")
             shown.isEmpty() -> Empty(Icons.Rounded.FolderOpen, "Nothing here yet",
                 "Files sent to this TV are saved in Downloads/Ferry and show up here. Open Receive to see the code to send with.")
             else -> LazyVerticalGrid(GridCells.Adaptive(180.dp), Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 6.dp, bottom = 32.dp, start = 4.dp, end = 4.dp),
