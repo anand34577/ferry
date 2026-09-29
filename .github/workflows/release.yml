@@ -66,13 +66,14 @@ jobs:
       - run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
       - name: Build the Windows app and installer
         run: |
-          command -v makensis || choco install nsis -y --no-progress
-          export PATH="$PATH:/c/Program Files (x86)/NSIS"
-          v="${GITHUB_REF_NAME#v}"; v="${v%%-*}" # the installer needs a plain x.y.z
+          iscc="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          [ -x "$iscc" ] || { choco install innosetup -y --no-progress; }
+          v="${GITHUB_REF_NAME#v}"; v="${v%%-*}" # version resources need a plain x.y.z
           sed -i "s/\"productVersion\": \"[^\"]*\"/\"productVersion\": \"$v\"/" wails.json
-          wails build -clean -trimpath -nsis -ldflags "-X main.version=${GITHUB_REF_NAME}"
+          wails build -clean -trimpath -ldflags "-X main.version=${GITHUB_REF_NAME}"
+          "$iscc" //Q //DAppVersion=$v build/windows/installer.iss
           mkdir -p ../dist
-          cp build/bin/Ferry-amd64-installer.exe "../dist/ferry-windows_${GITHUB_REF_NAME}_setup.exe"
+          cp build/bin/Ferry-setup.exe "../dist/ferry-windows_${GITHUB_REF_NAME}_setup.exe"
           cp build/bin/FerryDesktop.exe "../dist/ferry-windows_${GITHUB_REF_NAME}_portable.exe"
       - uses: actions/upload-artifact@v4
         with: { name: desktop, path: dist/* }

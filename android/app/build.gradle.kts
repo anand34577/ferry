@@ -12,8 +12,8 @@ android {
         applicationId = "dev.ferry.app"
         minSdk = 29
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.4.0"
+        versionCode = 6
+        versionName = "1.5.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

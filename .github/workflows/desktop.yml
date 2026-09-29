@@ -18,8 +18,9 @@ jobs:
         run: cd frontend && npm ci --no-audit --no-fund && npx tsc --noEmit
       - name: Build app and installer
         run: |
-          command -v makensis || choco install nsis -y --no-progress
-          export PATH="$PATH:/c/Program Files (x86)/NSIS"
-          wails build -clean -trimpath -nsis -ldflags "-X main.version=dev-${GITHUB_SHA::7}"
+          iscc="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          [ -x "$iscc" ] || { choco install innosetup -y --no-progress; }
+          wails build -clean -trimpath -ldflags "-X main.version=dev-${GITHUB_SHA::7}"
+          "$iscc" //Q //DAppVersion=0.0.0 build/windows/installer.iss
       - uses: actions/upload-artifact@v4
         with: { name: ferry-windows, path: desktop/build/bin/* }
