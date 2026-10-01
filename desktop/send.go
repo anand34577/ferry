@@ -102,8 +102,26 @@ func (a *App) SendDirect(peerKey string, paths []string) (string, error) {
 type directState struct {
 	session string
 	tokens  map[string]string
+	resumed bool              // the session existed before this run (paused or dropped): ask the receiver where each file stands
+	mu      sync.Mutex        // guards sent: files upload in parallel
 	sent    map[string]string // file ID → SHA-256 sent
 }
+
+func (st *directState) isSent(id string) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	_, ok := st.sent[id]
+	return ok
+}
+
+func (st *directState) markSent(id, sha string) {
+	st.mu.Lock()
+	st.sent[id] = sha
+	st.mu.Unlock()
+}
+
+// parallelFiles is how many files upload at once: it hides per-file round trips and slow disk reads.
+const parallelFiles = 4
 
 func (a *App) sendDirect(p lan.Peer, files []TFile, fallbackDevice string) string {
 	t := &Transfer{ID: newID(), Direction: "sent", Method: "direct", Peer: p.Alias, Status: stConnecting, Files: files, CanPause: p.Ferry}
@@ -141,6 +159,7 @@ func (a *App) runDirect(id string, peer lan.Peer, fallbackDevice string, st *dir
 		peer.Ferry, peer.CertPin = info.Ferry, info.CertPin
 		a.store.update(id, func(t *Transfer) { t.CanPause = peer.Ferry })
 		t, _ := a.store.get(id)
+		st.resumed = st.session != ""
 		if st.session == "" {
 			a.store.status(id, stWaiting, "Waiting for "+peer.Alias+" to accept…")
 			meta := map[string]lan.FileMeta{}
@@ -169,19 +188,45 @@ func (a *App) runDirect(id string, peer lan.Peer, fallbackDevice string, st *dir
 			}
 		}
 		a.store.status(id, stTransferring, "")
+		// Parallel for Ferry peers; stock LocalSend gets two at a time to stay conservative with its server.
+		par := parallelFiles
+		if !peer.Ferry {
+			par = 2
+		}
+		gctx, stop := context.WithCancel(ctx)
+		defer stop()
+		var wg sync.WaitGroup
+		var once sync.Once
+		var first error
+		sem := make(chan struct{}, par)
+	files:
 		for _, f := range t.Files {
 			tok, ok := st.tokens[f.ID]
-			if !ok { // the receiver skipped it
+			if !ok || st.isSent(f.ID) { // the receiver skipped it, or it's already done
 				continue
 			}
-			if _, done := st.sent[f.ID]; done {
-				continue
+			select {
+			case sem <- struct{}{}:
+			case <-gctx.Done():
+				break files
 			}
-			sha, err := a.sendFile(ctx, id, peer, st, f, tok)
-			if err != nil {
-				return err
-			}
-			st.sent[f.ID] = sha
+			wg.Add(1)
+			go func() {
+				defer func() { <-sem; wg.Done() }()
+				sha, err := a.sendFile(gctx, id, peer, st, f, tok)
+				if err == nil {
+					st.markSent(f.ID, sha)
+					return
+				}
+				once.Do(func() { first = err; stop() }) // the first failure stops its siblings
+			}()
+		}
+		wg.Wait()
+		if first != nil {
+			return first
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if peer.Ferry {
 			a.store.status(id, stVerifying, "Verifying integrity…")
@@ -243,7 +288,7 @@ func (a *App) port() int {
 
 // sendFile streams one file; with Ferry peers it reconnects and resumes from the receiver's offset.
 func (a *App) sendFile(ctx context.Context, id string, peer lan.Peer, st *directState, f TFile, token string) (string, error) {
-	resuming := len(st.sent) > 0 || f.Done > 0
+	resuming := st.resumed || f.Done > 0
 	for attempt := 0; ; attempt++ {
 		var offset int64
 		if resuming && peer.Ferry {
@@ -267,7 +312,22 @@ func (a *App) sendFile(ctx context.Context, id string, peer lan.Peer, st *direct
 				return "", fmt.Errorf("can't read %q: %w", f.Name, err)
 			}
 			a.store.progress(id, f.ID, offset)
-			body := &progressReader{r: io.TeeReader(io.LimitReader(fh, f.Size-offset), h), fn: func(n int64) { a.store.progress(id, f.ID, offset+n) }}
+			// Disk reads and hashing run ahead of the network, which keeps the link saturated.
+			left := f.Size - offset
+			ahead := lan.ReadAhead(1<<20, 4, func(buf []byte) (int, error) {
+				if left <= 0 {
+					return 0, io.EOF
+				}
+				n, err := fh.Read(buf[:min(int64(len(buf)), left)])
+				h.Write(buf[:n])
+				left -= int64(n)
+				if err == io.EOF && left > 0 {
+					err = io.ErrUnexpectedEOF
+				}
+				return n, err
+			})
+			defer ahead.Close()
+			body := &progressReader{r: ahead, fn: func(n int64) { a.store.progress(id, f.ID, offset+n) }}
 			if err := lan.Upload(ctx, peer, st.session, f.ID, token, offset, body, f.Size-offset); err != nil {
 				return "", err
 			}

@@ -7,6 +7,7 @@ import dev.ferry.app.BuildConfig
 import dev.ferry.app.FerryApp
 import dev.ferry.app.transfer.Storage
 import dev.ferry.app.util.hex
+import dev.ferry.app.util.pipelined
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -294,21 +295,25 @@ class StreamBody(
     override fun contentLength() = len
     override fun isOneShot() = true
     override fun writeTo(sink: BufferedSink) {
-        val buf = ByteArray(256 * 1024)
         var left = len
         var sent = 0L
         var lastReport = 0L
-        while (left > 0) {
+        // File reads (slow for content:// URIs) and hashing run ahead of the socket writes.
+        pipelined(produce = { buf ->
             if (cancelled()) throw CancelledException()
-            val r = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
-            if (r < 0) throw IOException("File changed while uploading")
-            sink.write(buf, 0, r)
-            md.update(buf, 0, r)
-            left -= r; sent += r
-            if (sent - lastReport > 128 * 1024 || left == 0L) {
+            if (left <= 0) -1 else {
+                val r = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+                if (r < 0) throw IOException("File changed while uploading")
+                md.update(buf, 0, r); left -= r
+                r
+            }
+        }, consume = { buf, n ->
+            sink.write(buf, 0, n)
+            sent += n
+            if (sent - lastReport > 128 * 1024 || sent == len) {
                 progress(sent); lastReport = sent
             }
-        }
+        })
     }
 }
 

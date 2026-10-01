@@ -25,7 +25,13 @@ class PeerException(val status: Int, message: String) : IOException(message)
 object LanClient {
     private val JSON = "application/json".toMediaType()
 
-    fun client(expectedFingerprint: String, readTimeoutSec: Long = 30, seen: ((String) -> Unit)? = null): OkHttpClient {
+    // One client per peer identity and timeout, so files and calls reuse TLS connections instead of re-handshaking.
+    private val clients = java.util.concurrent.ConcurrentHashMap<Pair<String, Long>, OkHttpClient>()
+
+    fun client(expectedFingerprint: String, readTimeoutSec: Long = 30): OkHttpClient =
+        clients.getOrPut(expectedFingerprint to readTimeoutSec) { build(expectedFingerprint, readTimeoutSec, null) }
+
+    private fun build(expectedFingerprint: String, readTimeoutSec: Long, seen: ((String) -> Unit)?): OkHttpClient {
         val tm = object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
             override fun checkServerTrusted(chain: Array<out X509Certificate>, authType: String?) {
@@ -40,6 +46,9 @@ object LanClient {
         val ssl = SSLContext.getInstance("TLS").apply { init(identityKeyManagers(), arrayOf(tm), SecureRandom()) }
         return OkHttpClient.Builder()
             .sslSocketFactory(ssl.socketFactory, tm)
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1)) // LocalSend peers speak HTTP/1.1
+            // Idle connections go before NanoHTTPD's 5 s keep-alive timeout would close them under us.
+            .connectionPool(okhttp3.ConnectionPool(8, 3, TimeUnit.SECONDS))
             .hostnameVerifier { _, _ -> true } // identity is the pinned fingerprint, not a hostname
             .connectTimeout(4, TimeUnit.SECONDS)
             .readTimeout(readTimeoutSec, TimeUnit.SECONDS)
@@ -81,7 +90,7 @@ object LanClient {
                 val host = if (ip.contains(':')) "[$ip]" else ip
                 val url = (if (https) "https" else "http") + "://$host:$port${LocalSend.API}/info"
                 var seenCert = ""
-                client(pin, 5) { seenCert = it }.newCall(Request.Builder().url(url).get().build()).execute().use { r ->
+                build(pin, 5) { seenCert = it }.newCall(Request.Builder().url(url).get().build()).execute().use { r ->
                     val o = JSONObject(check(r))
                     return LocalSend.peerFrom(o, ip, source, port, https).copy(port = port, https = https, certPin = seenCert)
                 }
