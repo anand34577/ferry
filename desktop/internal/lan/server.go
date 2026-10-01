@@ -410,40 +410,44 @@ func (s *Server) receive(r *http.Request, sess *session, f *rfile, offset, lengt
 		}
 	}
 	f.received.Store(offset)
-	buf := make([]byte, 256<<10)
 	left := length
 	lastReport := time.Now()
-	for left > 0 {
+	// Network reads and hashing run ahead of the disk writes, so neither waits for the other.
+	err = Pipeline(1<<20, 4, func(buf []byte) (int, error) {
 		if sess.cancelled.Load() {
-			return errors.New("cancelled")
+			return 0, errors.New("cancelled")
+		}
+		if left <= 0 {
+			return 0, io.EOF
 		}
 		n, rerr := r.Body.Read(buf[:min(int64(len(buf)), left)])
-		if n > 0 {
-			if _, err := out.Write(buf[:n]); err != nil {
-				return err
-			}
-			h.Write(buf[:n])
-			left -= int64(n)
-			f.received.Add(int64(n))
-			sess.lastActivity.Store(time.Now().UnixMilli())
-			if time.Since(lastReport) > 150*time.Millisecond {
-				s.host.RecvProgress(sess.transferID, f.id, f.received.Load())
-				lastReport = time.Now()
-			}
+		h.Write(buf[:n])
+		left -= int64(n)
+		if rerr == io.EOF && left > 0 {
+			rerr = io.ErrUnexpectedEOF
 		}
-		if rerr != nil {
-			if rerr == io.EOF && left == 0 {
-				break
-			}
-			if rerr == io.EOF {
-				return io.ErrUnexpectedEOF
-			}
-			return rerr
+		if rerr == io.EOF && left == 0 {
+			rerr = nil
 		}
+		return n, rerr
+	}, func(buf []byte) error {
+		if _, err := out.Write(buf); err != nil {
+			return err
+		}
+		f.received.Add(int64(len(buf)))
+		sess.lastActivity.Store(time.Now().UnixMilli())
+		if time.Since(lastReport) > 150*time.Millisecond {
+			s.host.RecvProgress(sess.transferID, f.id, f.received.Load())
+			lastReport = time.Now()
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	s.host.RecvProgress(sess.transferID, f.id, f.received.Load())
 	if chunked {
-		if n, _ := r.Body.Read(buf[:1]); n > 0 {
+		if n, _ := r.Body.Read(make([]byte, 1)); n > 0 {
 			return errors.New("more data than declared")
 		}
 	}

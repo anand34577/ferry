@@ -9,6 +9,7 @@ import dev.ferry.app.data.TFile
 import dev.ferry.app.data.TStatus
 import dev.ferry.app.data.Transfer
 import dev.ferry.app.server.hashPrefix
+import dev.ferry.app.util.pipelined
 import dev.ferry.app.transfer.Storage
 import dev.ferry.app.util.hex
 import dev.ferry.app.util.safeRelativePath
@@ -181,20 +182,22 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
             f.received = offset
             val input = if (chunked) ChunkedInputStream(s.inputStream) else s.inputStream
             (if (offset == 0L) Storage.openTruncate(ctx, uri) else Storage.openAppend(ctx, uri)).use { out ->
-                val buf = ByteArray(256 * 1024)
                 var left = len
-                while (left > 0) {
+                // Socket reads and hashing run ahead of the (slower) storage writes.
+                pipelined(produce = { buf ->
                     if (sess.cancelled) throw IOException("cancelled")
-                    val n = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
-                    if (n < 0 && chunked) break // body ended; a short upload is caught below
-                    if (n < 0) throw IOException("Connection closed")
+                    if (left <= 0) -1 else {
+                        val n = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+                        if (n < 0 && chunked) -1 // body ended; a short upload is caught below
+                        else if (n < 0) throw IOException("Connection closed")
+                        else { md.update(buf, 0, n); left -= n; n }
+                    }
+                }, consume = { buf, n ->
                     out.write(buf, 0, n)
-                    md.update(buf, 0, n)
-                    left -= n
                     f.received += n
                     sess.lastActivity = System.currentTimeMillis()
                     app.transfers.lanReceiveProgress(sess.transferId, f.id, f.received)
-                }
+                })
             }
             // A chunked body's length is only known at its end: reject one that's longer or shorter than declared.
             if (chunked && input.read() >= 0) return err(Response.Status.BAD_REQUEST, "More data than declared")

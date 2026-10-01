@@ -28,7 +28,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Call
@@ -66,6 +69,10 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
     val retryable = ConcurrentHashMap<String, () -> Unit>()
     val linkable = ConcurrentHashMap<String, List<TFile>>()
 
+    private companion object {
+        const val PARALLEL_FILES = 4
+    }
+
     private class DirectState(val sessionId: String, val tokens: Map<String, String>) {
         val sent = ConcurrentHashMap<String, String>() // fileId → sha256
     }
@@ -73,7 +80,9 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
     private class Control {
         val cancelled = AtomicBoolean(false)
         val paused = AtomicBoolean(false)
-        @Volatile var call: Call? = null
+        val calls: MutableSet<Call> = ConcurrentHashMap.newKeySet() // in flight: parallel files each have one
+        val done = ConcurrentHashMap<String, Long>() // fileId → bytes done, updated on every progress tick
+        fun cancelCalls() = calls.forEach { it.cancel() }
         var job: Job? = null
         var direct: DirectState? = null
         var restart: (() -> Unit)? = null
@@ -131,18 +140,22 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
 
     private fun progress(id: String, fileId: String, done: Long) {
         val c = controls.getOrPut(id) { Control() }
+        c.done[fileId] = done // every tick is recorded; only the UI update is throttled, so parallel files add up correctly
         val now = System.currentTimeMillis()
         val t = get(id) ?: return
-        val files = t.files.map { if (it.id == fileId) it.copy(done = done) else it }
-        val total = files.sumOf { it.done }
-        if (now - c.lastEmit < 250 && total < t.total) return
-        var speed = t.speed
-        if (c.lastTime > 0 && now > c.lastTime) {
-            val inst = (total - c.lastBytes) * 1000.0 / (now - c.lastTime)
-            if (inst >= 0) speed = if (speed > 0) speed * 0.7 + inst * 0.3 else inst
+        val finished = t.files.any { it.id == fileId && done >= it.size }
+        synchronized(c) {
+            if (now - c.lastEmit < 250 && !finished) return
+            val files = t.files.map { f -> c.done[f.id]?.let { f.copy(done = it) } ?: f }
+            val total = files.sumOf { it.done }
+            var speed = t.speed
+            if (c.lastTime > 0 && now > c.lastTime) {
+                val inst = (total - c.lastBytes) * 1000.0 / (now - c.lastTime)
+                if (inst >= 0) speed = if (speed > 0) speed * 0.7 + inst * 0.3 else inst
+            }
+            c.lastTime = now; c.lastBytes = total; c.lastEmit = now
+            update(id) { it.copy(files = files, speed = speed) }
         }
-        c.lastTime = now; c.lastBytes = total; c.lastEmit = now
-        update(id) { it.copy(files = files, speed = speed) }
     }
 
     private fun finish(id: String, s: TStatus, error: String = "", shareUrl: String = "") {
@@ -185,7 +198,7 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
         }
         c.paused.set(false)
         c.cancelled.set(true)
-        c.call?.cancel()
+        c.cancelCalls()
         if (c.job?.isActive != true) {
             // A paused direct send still holds a session on the receiver: tell it we're done.
             val peer = c.peer
@@ -199,7 +212,7 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
         val c = controls[id] ?: return
         c.paused.set(true)
         c.cancelled.set(true)
-        c.call?.cancel()
+        c.cancelCalls()
     }
 
     fun resume(id: String) {
@@ -249,7 +262,7 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
                     var prepared: LanClient.Prepared?
                     while (true) {
                         try {
-                            prepared = LanClient.prepare(peer, self, filesJson, pin) { c.call = it }
+                            prepared = LanClient.prepare(peer, self, filesJson, pin) { c.calls += it }
                             break
                         } catch (e: PeerException) {
                             if (e.status != 401) throw e
@@ -263,10 +276,23 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
                     c.direct = st
                 }
                 status(id, TStatus.TRANSFERRING)
-                for (f in files) {
-                    if (st.sent.containsKey(f.id)) continue
-                    val token = st.tokens[f.id] ?: continue // receiver skipped this file
-                    st.sent[f.id] = sendFile(id, peer, st, f, token, c)
+                // Several files at once keep the link busy through per-file handshakes and slow storage reads.
+                val gate = Semaphore(if (peer.ferry) PARALLEL_FILES else 2)
+                coroutineScope {
+                    for (f in files) {
+                        if (st.sent.containsKey(f.id)) continue
+                        val token = st.tokens[f.id] ?: continue // receiver skipped this file
+                        launch {
+                            gate.withPermit {
+                                try {
+                                    st.sent[f.id] = sendFile(id, peer, st, f, token, c)
+                                } catch (e: Exception) {
+                                    c.cancelCalls() // unblock the sibling uploads so the whole send stops promptly
+                                    throw e
+                                }
+                            }
+                        }
+                    }
                 }
                 if (peer.ferry) {
                     status(id, TStatus.VERIFYING, "Verifying integrity…")
@@ -325,9 +351,13 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
                     progress(id, f.id, offset)
                     val body = StreamBody(input, f.size - offset, md, { c.cancelled.get() }) { progress(id, f.id, offset + it) }
                     val call = LanClient.client(peer.certPin, 120).newCall(LanClient.uploadRequest(peer, st.sessionId, f.id, token, offset, body))
-                    c.call = call
-                    call.execute().use { r ->
-                        if (!r.isSuccessful) throw PeerException(r.code, r.body?.string()?.let { runCatching { JSONObject(it).optString("message") }.getOrNull() } ?: "HTTP ${r.code}")
+                    c.calls += call
+                    try {
+                        call.execute().use { r ->
+                            if (!r.isSuccessful) throw PeerException(r.code, r.body?.string()?.let { runCatching { JSONObject(it).optString("message") }.getOrNull() } ?: "HTTP ${r.code}")
+                        }
+                    } finally {
+                        c.calls -= call
                     }
                 } ?: throw IOException("Can't read \"${f.name}\". It may have been moved or deleted.")
                 if (resuming) status(id, TStatus.TRANSFERRING)

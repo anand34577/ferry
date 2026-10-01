@@ -3,6 +3,7 @@ package dev.ferry.app
 import dev.ferry.app.data.TStatus
 import dev.ferry.app.util.PairCode
 import dev.ferry.app.util.formatBytes
+import dev.ferry.app.util.pipelined
 import dev.ferry.app.util.safeName
 import dev.ferry.app.util.safeRelativePath
 import org.junit.Assert.assertEquals
@@ -49,5 +50,22 @@ class UtilTest {
     fun bytes() {
         assertEquals("512 B", formatBytes(512))
         assertTrue(formatBytes(1536).startsWith("1") && formatBytes(1536).endsWith("KB"))
+    }
+
+    @Test
+    fun pipelinedCopiesInOrderAndSurfacesFailures() {
+        val src = ByteArray(100_000) { (it % 251).toByte() }
+        var pos = 0
+        val out = java.io.ByteArrayOutputStream()
+        pipelined(size = 1000, depth = 3, produce = { b ->
+            val n = minOf(b.size, src.size - pos)
+            if (n <= 0) -1 else { System.arraycopy(src, pos, b, 0, n); pos += n; n }
+        }, consume = { b, n -> out.write(b, 0, n) })
+        assertTrue(src.contentEquals(out.toByteArray()))
+
+        val boom = runCatching { pipelined(produce = { throw java.io.IOException("read failed") }, consume = { _, _ -> }) }.exceptionOrNull()
+        assertEquals("read failed", boom?.message)
+        val boom2 = runCatching { pipelined(produce = { 1 }, consume = { _, _ -> throw java.io.IOException("write failed") }) }.exceptionOrNull()
+        assertEquals("write failed", boom2?.message)
     }
 }
