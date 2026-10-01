@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"syscall"
 	"unsafe"
 
@@ -79,4 +80,32 @@ func revealInExplorer(path string) error {
 // openPath opens a file with its default program.
 func openPath(path string) error {
 	return windows.ShellExecute(0, windows.StringToUTF16Ptr("open"), windows.StringToUTF16Ptr(path), nil, nil, windows.SW_SHOWNORMAL)
+}
+
+var setExecState = windows.NewLazySystemDLL("kernel32.dll").NewProc("SetThreadExecutionState")
+
+// awakeCh feeds a dedicated OS thread: the execution state belongs to the thread that sets it, and Go goroutines move between threads.
+var awakeCh = func() chan bool {
+	ch := make(chan bool, 1)
+	go func() {
+		runtime.LockOSThread()
+		for on := range ch {
+			flags := uintptr(0x80000000) // ES_CONTINUOUS
+			if on {
+				flags |= 0x1 // ES_SYSTEM_REQUIRED: don't sleep mid-transfer (the screen may still turn off)
+			}
+			setExecState.Call(flags)
+		}
+	}()
+	return ch
+}()
+
+// setAwake tells Windows not to put the computer to sleep while a transfer runs.
+func setAwake(on bool) {
+	select {
+	case awakeCh <- on:
+	default:
+		<-awakeCh // replace a pending value with the newest one
+		awakeCh <- on
+	}
 }

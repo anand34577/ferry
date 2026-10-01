@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -27,13 +28,45 @@ var clientCert atomic.Pointer[tls.Certificate]
 // client returns an HTTP client for one peer. Peers use self-signed certificates, so trust is pinning:
 // the certificate seen on first contact (or the fingerprint in a scanned QR code) must match every later
 // connection. seen receives the fingerprint of the certificate actually presented.
+//
+// Clients that don't need to learn the certificate are shared per pin, so parallel uploads and the calls
+// around them reuse TLS connections instead of handshaking every time.
 func client(pin string, timeout time.Duration, seen *string) *http.Client {
+	if seen != nil {
+		return newClient(pin, timeout, seen)
+	}
+	key := clientKey{pin, timeout}
+	pool.Lock()
+	defer pool.Unlock()
+	if c, ok := pool.m[key]; ok {
+		return c
+	}
+	c := newClient(pin, timeout, nil)
+	pool.m[key] = c
+	return c
+}
+
+type clientKey struct {
+	pin     string
+	timeout time.Duration
+}
+
+var pool = struct {
+	sync.Mutex
+	m map[clientKey]*http.Client
+}{m: map[clientKey]*http.Client{}}
+
+func newClient(pin string, timeout time.Duration, seen *string) *http.Client {
 	tr := &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 4 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   6 * time.Second,
 		ResponseHeaderTimeout: timeout,
-		DisableKeepAlives:     true, // every client is used for one call; idle connections would pile up
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       3 * time.Second, // shorter than any peer's keep-alive, so a reused connection is never stale
+		WriteBufferSize:       256 << 10,       // fewer syscalls per upload than the 4 KiB default
+		ReadBufferSize:        64 << 10,
 		TLSClientConfig: &tls.Config{
+			ClientSessionCache: tls.NewLRUClientSessionCache(16), // resumed handshakes are cheaper on a fresh connection
 			// Current LocalSend requires a client certificate (mTLS) and uses it as the sender's identity.
 			GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
 				if c := clientCert.Load(); c != nil {
