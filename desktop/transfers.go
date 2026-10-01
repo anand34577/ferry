@@ -78,6 +78,7 @@ type store struct {
 	controls map[string]*control
 	path     string
 	dirty    bool
+	awake    bool // Windows is being kept from sleeping
 	emit     func(list []Transfer)
 	speedAt  map[string]speedSample
 }
@@ -102,9 +103,28 @@ func newStore(dir string, emit func([]Transfer)) *store {
 	go func() {
 		for range time.Tick(200 * time.Millisecond) {
 			s.flush()
+			s.keepAwake()
 		}
 	}()
 	return s
+}
+
+// keepAwake stops Windows sleeping while any transfer is moving data, and releases it afterwards.
+func (s *store) keepAwake() {
+	s.mu.Lock()
+	busy := false
+	for _, t := range s.active {
+		if t.Status == stTransferring || t.Status == stVerifying || t.Status == stConnecting {
+			busy = true
+			break
+		}
+	}
+	changed := busy != s.awake
+	s.awake = busy
+	s.mu.Unlock()
+	if changed {
+		setAwake(busy)
+	}
 }
 
 func (s *store) flush() {

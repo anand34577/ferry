@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.os.Build
 import android.os.PowerManager
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
@@ -26,6 +27,7 @@ import kotlinx.coroutines.launch
 class TransferService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var wake: PowerManager.WakeLock? = null
+    private var wifi: android.net.wifi.WifiManager.WifiLock? = null
     private var holdsDiscovery = false
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -59,11 +61,20 @@ class TransferService : Service() {
         wake = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ferry:transfer").apply {
             setReferenceCounted(false); acquire(6 * 60 * 60 * 1000L)
         }
+        // Without this, Wi-Fi drops into power-save when the screen turns off and throughput collapses.
+        val mode = if (Build.VERSION.SDK_INT >= 29) android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY else @Suppress("DEPRECATION") android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        wifi = runCatching {
+            applicationContext.getSystemService(android.net.wifi.WifiManager::class.java).createWifiLock(mode, "ferry:transfer").apply {
+                setReferenceCounted(false); acquire()
+            }
+        }.getOrNull()
     }
 
     private fun releaseWake() {
         runCatching { wake?.release() }
         wake = null
+        runCatching { wifi?.release() }
+        wifi = null
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY

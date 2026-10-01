@@ -118,3 +118,41 @@ object PairCode {
         return ip to port
     }
 }
+
+/**
+ * Overlaps the two ends of a copy: [produce] fills buffers on a worker thread (returns bytes read, or -1 at the end)
+ * while [consume] handles them on the caller's thread — e.g. socket reads and disk writes, or disk reads and socket writes.
+ * A failure on either side is rethrown to the caller. Memory is bounded to [depth] buffers of [size] bytes.
+ */
+fun pipelined(size: Int = 512 * 1024, depth: Int = 4, produce: (ByteArray) -> Int, consume: (ByteArray, Int) -> Unit) {
+    class Chunk(val buf: ByteArray, var n: Int = 0)
+    val free = java.util.concurrent.ArrayBlockingQueue<Chunk>(depth)
+    val full = java.util.concurrent.ArrayBlockingQueue<Chunk>(depth + 1) // +1: room for the failure marker
+    repeat(depth) { free.add(Chunk(ByteArray(size))) }
+    val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+    val worker = Thread {
+        try {
+            while (true) {
+                val c = free.take()
+                c.n = produce(c.buf)
+                full.put(c)
+                if (c.n < 0) return@Thread
+            }
+        } catch (_: InterruptedException) {
+        } catch (t: Throwable) {
+            failure.set(t)
+            full.offer(Chunk(ByteArray(0), -1))
+        }
+    }.apply { isDaemon = true; name = "ferry-pipe"; start() }
+    try {
+        while (true) {
+            val c = full.take()
+            if (c.n < 0) break
+            consume(c.buf, c.n)
+            free.put(c)
+        }
+        failure.get()?.let { throw it }
+    } finally {
+        worker.interrupt()
+    }
+}
