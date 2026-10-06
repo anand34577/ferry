@@ -1,5 +1,7 @@
 # Ferry
 
+![Ferry on Windows and Android](docs/images/hero.png)
+
 **Send files to anyone, anywhere — from your own server, or directly between devices without internet.**
 
 Ferry is self-hosted file sharing and transfer. Your files stay on hardware you control; no accounts with third parties, no tracking.
@@ -13,6 +15,33 @@ Ferry is self-hosted file sharing and transfer. Your files stay on hardware you 
 - **Link analytics, notifications and themes:** see who opened and downloaded your links, get Gotify or email alerts, optional short links via Shortr, 12 colour themes
 
 Ferry runs as a single program with the web app built in, on Windows, macOS and Linux (including Raspberry Pi), or in Docker. Apps for Android and Windows are included.
+
+## Screenshots
+
+Light and dark themes follow your system. Screens are the real interface, shown with sample devices and files.
+
+**Windows**
+
+| Send to nearby devices | Approve what arrives |
+|---|---|
+| ![Send screen in dark theme](docs/images/win-send-dark.png) | ![Incoming files prompt](docs/images/win-incoming-light.png) |
+| **Live progress and history** | **Receive, pair by QR or code** |
+| ![Transfers in light theme](docs/images/win-transfers-light.png) | ![Receive screen in dark theme](docs/images/win-receive-dark.png) |
+
+**Android**
+
+<p>
+<img src="docs/images/and-home-light.png" width="23%" alt="Home">
+<img src="docs/images/and-receive-light.png" width="23%" alt="Receive with QR and pairing code">
+<img src="docs/images/and-home-dark.png" width="23%" alt="Home in dark theme">
+<img src="docs/images/and-settings-light.png" width="23%" alt="Settings">
+</p>
+
+**Android TV**
+
+| Receive on the big screen | Send from the couch |
+|---|---|
+| ![Receive screen with QR and pairing code](docs/images/tv-receive.png) | ![Send screen](docs/images/tv-send.png) |
 
 ## Quick start
 

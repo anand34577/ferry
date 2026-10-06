@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -131,7 +132,7 @@ fun TvRoot() {
                 .padding(vertical = 20.dp, horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(Modifier.padding(start = 8.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(32.dp).clip(RoundedCornerShape(12.dp)).background(Tv.brand), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Download, null, Modifier.size(18.dp), tint = androidx.compose.ui.graphics.Color.White)
+                        Icon(androidx.compose.ui.res.painterResource(dev.ferry.app.R.drawable.ic_launcher_foreground), null, Modifier.requiredSize(38.dp), tint = androidx.compose.ui.graphics.Color.Unspecified)
                     }
                     if (value == DrawerValue.Open) {
                         Spacer(Modifier.width(12.dp))
