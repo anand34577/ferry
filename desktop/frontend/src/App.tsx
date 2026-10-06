@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { app, on, type Device, type Incoming, type Peer, type State, type Transfer } from "./api";
 import { Icon, type IconName } from "./Icon";
 import { Modal, QR, Switch, useToast } from "./ui";
@@ -34,16 +34,32 @@ export default function App() {
   const [pin, setPin] = useState<{ transferId: string; peer: string; wrong: boolean } | null>(null);
   const [link, setLink] = useState<{ transferId: string; url: string } | null>(null);
 
+  const known = useRef<Set<string> | null>(null); // transfer ids already seen, to spot a new incoming one
+
   useEffect(() => {
     app
       .GetState()
       .then((s) => {
+        known.current = new Set((s.transfers ?? []).map((t) => t.id));
         setState(s);
         if (s.pending?.length) setSelection(s.pending);
       })
       .catch((e) => setError(String(e?.message ?? e)));
     const offs = [
-      on<Transfer[]>("transfers", (t) => setState((s) => s && { ...s, transfers: t })),
+      on<Transfer[]>("transfers", (t) => {
+        setState((s) => s && { ...s, transfers: t });
+        // Files arriving open the Transfers screen by themselves, so progress is visible without hunting for it.
+        const seen = known.current;
+        if (!seen) return;
+        let fresh = false;
+        for (const x of t ?? []) {
+          if (!seen.has(x.id)) {
+            seen.add(x.id);
+            fresh = fresh || (x.direction === "received" && !["completed", "failed", "cancelled", "rejected"].includes(x.status));
+          }
+        }
+        if (fresh) setPage("transfers");
+      }),
       on<Peer[]>("peers", (p) => setState((s) => s && { ...s, peers: p, scanning: s.scanning })),
       on<Incoming[]>("incoming", (i) => setState((s) => s && { ...s, incoming: i })),
       on<{ devices: Device[] | null; online: boolean; error: string }>("server", (d) => setState((s) => s && { ...s, devices: d.devices, online: d.online, serverError: d.error })),

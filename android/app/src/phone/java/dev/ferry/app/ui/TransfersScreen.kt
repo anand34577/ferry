@@ -21,6 +21,8 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Link
@@ -172,7 +174,15 @@ private fun HistoryRow(t: Transfer, onLink: (Transfer) -> Unit) {
     val ex = LocalExtra.current
     val ok = t.status == TStatus.COMPLETED
     var menu by remember { mutableStateOf(false) }
+    val first = t.files.firstOrNull { it.uri != null }
+    val canOpen = !t.sent && ok && first != null
+    val openIt = {
+        val f = if (t.files.size == 1) first else null
+        if (f == null) openReceivedFolder(ctx) else if (!openFile(ctx, f.uri!!, f.mime)) toast(ctx, "Couldn't open ${f.name}. It may have been moved or deleted, or no app can open it.")
+    }
     RowItem(
+        onClick = if (canOpen) openIt else null,
+        chevron = false,
         title = if (t.method == Method.LINK) "Link · ${t.files.firstOrNull()?.name ?: ""}" else (if (t.sent) "To " else "From ") + t.peer,
         subtitle = if (!ok && t.error.isNotEmpty()) t.error else "${t.files.size} file${if (t.files.size == 1) "" else "s"} · ${formatBytes(t.total)} · ${relativeTime(t.updatedAt)}",
         leading = {
@@ -188,6 +198,10 @@ private fun HistoryRow(t: Transfer, onLink: (Transfer) -> Unit) {
             Box {
                 IconButton({ menu = true }) { Icon(Icons.Rounded.MoreVert, "Actions") }
                 DropdownMenu(menu, { menu = false }) {
+                    if (canOpen && t.files.size == 1)
+                        DropdownMenuItem({ Text("Open file") }, { menu = false; openIt() }, leadingIcon = { Icon(Icons.AutoMirrored.Rounded.OpenInNew, null) })
+                    if (!t.sent && ok)
+                        DropdownMenuItem({ Text("Show in folder") }, { menu = false; openReceivedFolder(ctx) }, leadingIcon = { Icon(Icons.Rounded.FolderOpen, null) })
                     if (t.shareUrl.isNotEmpty()) {
                         DropdownMenuItem({ Text("Copy link") }, { menu = false; copyText(ctx, t.shareUrl) }, leadingIcon = { Icon(Icons.Rounded.ContentCopy, null) })
                         DropdownMenuItem({ Text("Share link") }, { menu = false; shareText(ctx, t.shareUrl) }, leadingIcon = { Icon(Icons.Rounded.Share, null) })

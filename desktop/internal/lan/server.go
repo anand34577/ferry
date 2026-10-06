@@ -70,28 +70,31 @@ type rfile struct {
 }
 
 type session struct {
-	id, alias, transferID, dir string
+	id, alias, transferID, dir, ip string
 	ferry                      bool
 	files                      map[string]*rfile
 	lastActivity               atomic.Int64
 	cancelled                  atomic.Bool
 }
 
-func (s *session) active() bool {
-	// Ferry senders resume for 10 minutes; a stock LocalSend sender can't, so its session ends sooner.
-	idle := 10 * time.Minute
-	if !s.ferry {
-		idle = 2 * time.Minute
-	}
-	if s.cancelled.Load() || time.Since(time.UnixMilli(s.lastActivity.Load())) > idle {
+// active reports whether the session should still turn other senders away. A session only blocks while
+// bytes are moving or it was touched in the last 30 seconds; the same device starting again always takes
+// over, so a failed or paused send never leaves the receiver "busy" for minutes.
+func (s *session) active(from string) bool {
+	if s.cancelled.Load() {
 		return false
 	}
+	undone := false
 	for _, f := range s.files {
-		if !f.done {
+		if f.busy.Load() {
 			return true
 		}
+		undone = undone || !f.done
 	}
-	return false
+	if !undone || from == s.ip {
+		return false
+	}
+	return time.Since(time.UnixMilli(s.lastActivity.Load())) < 30*time.Second
 }
 
 // Server is the LocalSend v2 receiver (HTTPS). One incoming session at a time, like LocalSend.
@@ -207,7 +210,7 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	busy := s.sess != nil && s.sess.active()
+	busy := s.sess != nil && s.sess.active(remoteIP(r))
 	if old := s.sess; old != nil && !busy {
 		s.mu.Unlock()
 		s.expire(old)
@@ -276,7 +279,7 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "Declined")
 		return
 	}
-	sess := &session{id: randHex(16), alias: in.Alias, ferry: req.Info.Ferry >= 1, files: map[string]*rfile{}, dir: dir}
+	sess := &session{id: randHex(16), alias: in.Alias, ip: remoteIP(r), ferry: req.Info.Ferry >= 1, files: map[string]*rfile{}, dir: dir}
 	sess.transferID = "lan-" + sess.id
 	sess.lastActivity.Store(time.Now().UnixMilli())
 	tokens := map[string]string{}

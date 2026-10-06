@@ -137,7 +137,7 @@ fun ReceiveScreen(nav: NavHostController) {
                     }
                 },
                 { RowItem("Trusted devices", "Devices you chose to remember", Icons.Rounded.VerifiedUser, ex.ok, onClick = { nav.navigate("trusted") }) },
-                { RowItem("Saved to", "Downloads/Ferry", Icons.Rounded.Download, Color(0xFF0E9F8E), chevron = false) },
+                { RowItem("Saved to", "Downloads/Ferry · tap to open", Icons.Rounded.Download, Color(0xFF0E9F8E), onClick = { openReceivedFolder(ctx) }) },
             ))
             if (requirePin) {
                 Spacer(Modifier.height(12.dp))

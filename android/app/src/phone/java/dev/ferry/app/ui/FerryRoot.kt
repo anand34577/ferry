@@ -80,6 +80,13 @@ fun FerryRoot() {
     LaunchedEffect(pendingRoute) {
         pendingRoute?.let { r -> Nav.pending.value = null; nav.navigate(r) { launchSingleTop = true } }
     }
+    // Files arriving open the Transfers screen by themselves, so progress is visible without hunting for it.
+    val seenIds = remember { HashSet<String>().apply { addAll(app.transfers.active.value.map { it.id }) } }
+    LaunchedEffect(active) {
+        val fresh = active.filter { !it.sent && it.status.active && it.id !in seenIds }
+        seenIds.addAll(active.map { it.id })
+        if (fresh.isNotEmpty() && nav.currentDestination?.route != "transfers") nav.navigate("transfers") { popUpTo("home"); launchSingleTop = true }
+    }
     // Android 13+: notifications are needed for the accept/decline prompt and background progress.
     val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {

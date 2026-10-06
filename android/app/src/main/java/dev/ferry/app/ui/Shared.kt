@@ -20,6 +20,32 @@ object SendQueue {
     }
 }
 
+/** Opens a received file in whatever app handles its type; false when nothing can open it or it was deleted. */
+fun openFile(ctx: android.content.Context, uri: android.net.Uri, mime: String): Boolean = try {
+    ctx.contentResolver.openFileDescriptor(uri, "r")?.close() ?: throw java.io.FileNotFoundException()
+    ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, mime.ifEmpty { "*/*" })
+        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    true
+} catch (_: Exception) {
+    false
+}
+
+/** Opens the Downloads/Ferry folder in the Files app, or the system Downloads list if that can't be targeted. */
+fun openReceivedFolder(ctx: android.content.Context) {
+    val folder = android.content.Intent(android.content.Intent.ACTION_VIEW)
+        .setDataAndType(android.net.Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload%2FFerry"), "vnd.android.document/directory")
+        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        ctx.startActivity(folder)
+    } catch (_: Exception) {
+        try {
+            ctx.startActivity(android.content.Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Exception) {
+            android.widget.Toast.makeText(ctx, "No file manager found. Your files are in Downloads/Ferry.", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+}
+
 /** Deep links / notifications ask the UI to navigate somewhere. */
 object Nav {
     val pending = MutableStateFlow<String?>(null)
