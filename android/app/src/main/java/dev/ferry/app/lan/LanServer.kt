@@ -36,7 +36,7 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
         @Volatile var busy = false
     }
 
-    private class Session(val id: String, val alias: String, val ferry: Boolean, val files: Map<String, RFile>) {
+    private class Session(val id: String, val alias: String, val ip: String, val ferry: Boolean, val files: Map<String, RFile>) {
         @Volatile var lastActivity = System.currentTimeMillis()
         @Volatile var cancelled = false
         val transferId = "lan-" + id
@@ -99,9 +99,11 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
     private fun prepare(s: IHTTPSession): Response {
         if (!app.prefs.receiving) return err(Response.Status.FORBIDDEN, "This device is not receiving right now.")
         val cur = session
-        // Ferry senders resume for 10 minutes; a stock LocalSend sender can't, so its session ends sooner.
-        val idleLimit = if (cur?.ferry == true) 10 * 60_000 else 2 * 60_000
-        if (cur != null && !cur.cancelled && System.currentTimeMillis() - cur.lastActivity < idleLimit && cur.files.values.any { !it.done }) {
+        // A session only turns others away while bytes are moving or it was touched in the last 30 seconds;
+        // the same device starting again always takes over, so a failed or paused send never leaves us "busy".
+        if (cur != null && !cur.cancelled && cur.files.values.any { !it.done } &&
+            (cur.files.values.any { it.busy } || (s.remoteIpAddress != cur.ip && System.currentTimeMillis() - cur.lastActivity < 30_000))
+        ) {
             return err(Response.Status.CONFLICT, "Busy with another transfer")
         }
         if (cur != null) expire(cur)
@@ -139,7 +141,7 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
             trusted = proven, ownAccount = false, files = files.map { (it.dirs + it.name).joinToString("/") to it.size }, source = TMethod.DIRECT)
         val accepted = app.transfers.askIncoming(req)
         if (!accepted) return err(Response.Status.FORBIDDEN, "Declined")
-        val sess = Session(UUID.randomUUID().toString(), alias, info.optInt("ferry", 0) >= 1, files.associateBy { it.id })
+        val sess = Session(UUID.randomUUID().toString(), alias, s.remoteIpAddress, info.optInt("ferry", 0) >= 1, files.associateBy { it.id })
         session = sess
         app.transfers.lanReceiveStarted(Transfer(sess.transferId, sent = false, method = TMethod.DIRECT, peer = alias,
             files = files.map { TFile(it.id, (it.dirs + it.name).joinToString("/"), it.size, it.mime) }, status = TStatus.WAITING))
@@ -212,6 +214,7 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
                 }
                 Storage.publish(ctx, uri)
                 f.done = true
+                app.transfers.lanReceiveFileSaved(sess.transferId, f.id, uri)
                 maybeFinish(sess)
             }
             return json(Response.Status.OK, JSONObject())

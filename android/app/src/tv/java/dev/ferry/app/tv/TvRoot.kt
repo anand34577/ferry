@@ -114,6 +114,13 @@ fun TvRoot() {
             else -> Screen.RECEIVE
         }
     }
+    // Files arriving open the Transfers screen by themselves, so progress is visible without hunting for it.
+    val seenIds = remember { HashSet<String>().apply { addAll(active.map { it.id }) } }
+    LaunchedEffect(active) {
+        val fresh = active.any { !it.sent && it.status.active && it.id !in seenIds }
+        seenIds.addAll(active.map { it.id })
+        if (fresh) screen = Screen.TRANSFERS
+    }
     // Back returns to Receive (the home screen); Back on Receive leaves the app.
     BackHandler(enabled = screen != Screen.RECEIVE) { screen = Screen.RECEIVE }
 

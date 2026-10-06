@@ -174,6 +174,9 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
         }
     }
 
+    private fun saved(id: String, fileId: String, uri: Uri) =
+        update(id) { t -> t.copy(files = t.files.map { if (it.id == fileId) it.copy(uri = uri, done = it.size) else it }) }
+
     private fun markUploaded(id: String, fileId: String, serverFileId: String) =
         update(id) { t -> t.copy(files = t.files.map { if (it.id == fileId) it.copy(serverFileId = serverFileId, done = it.size) else it }) }
 
@@ -535,6 +538,7 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
                         ?: Storage.createPending(ctx, f.name, f.mime).also { app.prefs.setKV(key, it.toString()) }
                     api.download(ctx, f.serverFileId, uri, f.size, f.sha256, { progress(id, f.id, it) }, { c.cancelled.get() })
                     Storage.publish(ctx, uri)
+                    saved(id, f.id, uri)
                     app.prefs.setKV(key, null)
                     app.prefs.setKV("dlok:${f.serverFileId}", "1")
                     bytes += f.size
@@ -588,6 +592,8 @@ class TransferManager(private val ctx: Context, private val scope: CoroutineScop
     // LAN receiver callbacks
     fun lanReceiveStarted(t: Transfer) = upsert(t)
     fun lanReceiveProgress(id: String, fileId: String, bytes: Long) = progress(id, fileId, bytes)
+    /** Remembers where a received file was saved, so it can be opened from the history. */
+    fun lanReceiveFileSaved(id: String, fileId: String, uri: Uri) = saved(id, fileId, uri)
     fun lanReceiveStatus(id: String, s: TStatus, note: String) {
         if (s == TStatus.FAILED) finish(id, s, note) else status(id, s, note)
     }

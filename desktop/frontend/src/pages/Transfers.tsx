@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { app, type Transfer } from "../api";
 import { useApp } from "../App";
 import { Icon, type IconName } from "../Icon";
@@ -75,7 +76,9 @@ export function TransfersPage() {
 
 function Row({ t }: { t: Transfer }) {
   const toast = useToast();
+  const [open, setOpen] = useState(false);
   const files = t.files ?? [];
+  const received = t.direction === "received";
   const done = FINAL.includes(t.status);
   const bad = t.status === "failed" || t.status === "rejected";
   const title = files.length === 1 ? files[0].name : plural(files.length, "file");
@@ -114,6 +117,40 @@ function Row({ t }: { t: Transfer }) {
             {t.error || t.note}
           </div>
         )}
+        {files.length > 1 && (
+          <button className="btn sm ghost" style={{ marginTop: 6 }} onClick={() => setOpen(!open)} aria-expanded={open}>
+            {open ? "Hide files" : "Show files"}
+          </button>
+        )}
+        {(open || files.length === 1) && received && t.status === "completed" && (
+          <div className="file-list" style={{ marginTop: 6 }}>
+            {files.map((f) => (
+              <div key={f.id}>
+                <span className="grow ellipsis" title={f.name}>
+                  {f.name}
+                </span>
+                <span className="muted">{bytes(f.size)}</span>
+                {f.path && (
+                  <button className="btn sm" onClick={() => app.OpenFile(f.path).catch(toast.error)}>
+                    Open
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {open && !(received && t.status === "completed") && (
+          <div className="file-list" style={{ marginTop: 6 }}>
+            {files.map((f) => (
+              <div key={f.id}>
+                <span className="grow ellipsis" title={f.name}>
+                  {f.name}
+                </span>
+                <span className="muted">{bytes(f.size)}</span>
+              </div>
+            ))}
+          </div>
+        )}
         {t.shareUrl && (
           <div className="row" style={{ marginTop: 6 }}>
             <input type="text" readOnly value={t.shareUrl} className="mono" onFocus={(e) => e.target.select()} style={{ minHeight: 32 }} />
@@ -139,7 +176,7 @@ function Row({ t }: { t: Transfer }) {
             <Icon name="retry" size={17} />
           </button>
         )}
-        {t.direction === "received" && t.status === "completed" && (
+        {received && t.status === "completed" && (
           <button className="btn icon ghost" title="Show in folder" aria-label="Show in folder" onClick={() => app.ShowInFolder(t.id).catch(toast.error)}>
             <Icon name="folder" size={17} />
           </button>

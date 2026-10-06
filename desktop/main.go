@@ -66,7 +66,7 @@ func main() {
 		OnBeforeClose:            app.beforeClose,
 		Bind:                     []interface{}{app},
 		EnableDefaultContextMenu: false,
-		DragAndDrop:              &options.DragAndDrop{EnableFileDrop: true, DisableWebViewDrop: true},
+		DragAndDrop:              &options.DragAndDrop{EnableFileDrop: true}, // WebView drop must stay on: on Windows the file-drop events come through it
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: "dev.ferry.desktop",
 			OnSecondInstanceLaunch: func(d options.SecondInstanceData) {
