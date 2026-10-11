@@ -171,7 +171,7 @@ type Go = {
 declare global {
   interface Window {
     go?: { main: { App: Go } };
-    runtime?: { EventsOn(name: string, cb: (...data: any[]) => void): () => void };
+    runtime?: { EventsOn(name: string, cb: (...data: any[]) => void): () => void; OnFileDrop?(cb: () => void, useDropTarget: boolean): void };
   }
 }
 
