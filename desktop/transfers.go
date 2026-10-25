@@ -319,6 +319,27 @@ func (s *store) clearHistory() {
 	s.saveHistory(nil)
 }
 
+// knowsPath reports whether a local file was sent or received by a transfer in this store.
+func (s *store) knowsPath(p string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, t := range s.active {
+		for _, f := range t.Files {
+			if f.Path == p {
+				return true
+			}
+		}
+	}
+	for _, t := range s.history {
+		for _, f := range t.Files {
+			if f.Path == p {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // findHistory returns a finished transfer (for "Show in folder").
 func (s *store) find(id string) (Transfer, bool) {
 	if t, ok := s.get(id); ok {

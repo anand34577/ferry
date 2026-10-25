@@ -291,7 +291,11 @@ func (a *App) SaveSettings(p SettingsPatch) (State, error) {
 		if v != "" && (len(v) < 4 || len(v) > 12) {
 			return a.GetState(), errors.New("the PIN must be 4–12 characters")
 		}
-		p.PIN = &v
+		if strings.HasPrefix(v, "dpapi:") { // a sealed value echoed back: keep the stored one
+			p.PIN = nil
+		} else {
+			p.PIN = &v
+		}
 	}
 	if p.DownloadDir != nil {
 		if err := os.MkdirAll(*p.DownloadDir, 0o755); err != nil {
@@ -319,7 +323,7 @@ func (a *App) SaveSettings(p SettingsPatch) (State, error) {
 			s.DownloadDir = *p.DownloadDir
 		}
 		if p.PIN != nil {
-			s.PIN = *p.PIN
+			s.PIN = pinSeal(*p.PIN) // stored encrypted; get() unseals it for display and for the gate
 		}
 		if p.Theme != nil {
 			s.Theme = *p.Theme
@@ -480,6 +484,11 @@ func (a *App) ShowInFolder(transferID string) error {
 }
 
 func (a *App) OpenFile(path string) error {
+	// Only files Ferry itself sent or received: a compromised renderer must not use this bridge
+	// as a generic "open anything" primitive.
+	if !a.store.knowsPath(path) {
+		return errors.New("only files sent or received with Ferry can be opened here")
+	}
 	if _, err := os.Stat(path); err != nil {
 		return errors.New("that file is no longer there")
 	}

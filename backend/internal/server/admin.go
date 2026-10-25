@@ -124,6 +124,19 @@ func (s *Server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, errf(400, "self_lockout", "You can't remove your own admin access or disable yourself."))
 		return
 	}
+	// Never leave the server without an administrator: two admins demoting or disabling each
+	// other concurrently would otherwise end with none.
+	if id != me.ID && u.Role == "admin" && ((req.Role != nil && *req.Role == "user") || (req.Disabled != nil && *req.Disabled)) {
+		var admins int
+		if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0 AND id <> ?`, id).Scan(&admins); err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+		if admins == 0 {
+			s.writeErr(w, r, errf(400, "last_admin", "This is the last administrator. Promote another admin first."))
+			return
+		}
+	}
 	if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
 		u.Name = strings.TrimSpace(*req.Name)
 		if len(u.Name) > 100 {

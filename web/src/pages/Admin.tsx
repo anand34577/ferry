@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { del, get, patch, post, shareLink, type Device, type Share, type User } from "../lib/api";
+import { del, get, patch, post, safeUrl, shareLink, type Device, type Share, type User } from "../lib/api";
 import { LinkAnalyticsDialog } from "../components/LinkAnalytics";
 import { ServerSettings } from "../components/ServerSettings";
 import { formatBytes, formatDate, relativeTime } from "../lib/format";
@@ -373,7 +373,7 @@ function AdminLinks() {
                   <Menu
                     items={[
                       { label: "Analytics", icon: "chart", onClick: () => setStats(s.id) },
-                      { label: "Open link", icon: "globe", onClick: () => window.open(shareLink(s), "_blank", "noopener") },
+                      { label: "Open link", icon: "globe", onClick: () => { const u = safeUrl(shareLink(s)); if (u) window.open(u, "_blank", "noopener"); } },
                       !s.revoked && { label: "Revoke", icon: "x", onClick: () => act(post(`/api/v1/admin/shares/${s.id}/revoke`), "Link revoked") },
                       {
                         label: "Delete",

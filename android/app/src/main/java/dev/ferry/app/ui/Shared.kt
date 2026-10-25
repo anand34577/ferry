@@ -49,6 +49,9 @@ fun openReceivedFolder(ctx: android.content.Context) {
 /** Deep links / notifications ask the UI to navigate somewhere. */
 object Nav {
     val pending = MutableStateFlow<String?>(null)
+
+    /** Routes of the phone app's navigation graph; extras from other apps may only use these. */
+    val routes = setOf("home", "send", "receive", "transfers", "server", "servers", "settings", "trusted", "scan")
 }
 
 fun qrBitmap(value: String, px: Int): Bitmap {

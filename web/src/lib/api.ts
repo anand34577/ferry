@@ -236,11 +236,26 @@ export interface SessionInfo {
   current: boolean;
 }
 
+/** Validates a URL the server provided (share links, shortener results): only http(s) may be opened,
+ *  and downloads must stay on this origin, so a compromised server or shortener can't run script here. */
+export function safeUrl(u: string, sameOrigin = false): string | null {
+  try {
+    const p = new URL(u, location.origin);
+    if (p.protocol !== "http:" && p.protocol !== "https:") return null;
+    if (sameOrigin && p.origin !== location.origin) return null;
+    return p.href;
+  } catch {
+    return null;
+  }
+}
+
 /** Downloads files/folders as one ZIP. The selection is posted first (it can be too long for a URL). */
 export async function downloadZip(fileIds: string[], folderIds: string[], name?: string) {
   const { url } = await post<{ url: string }>("/api/v1/files/zip", { fileIds, folderIds, name });
+  const href = safeUrl(url, true);
+  if (!href) throw new Error("The server returned an invalid download address.");
   const a = document.createElement("a");
-  a.href = url;
+  a.href = href;
   a.download = "";
   a.click();
 }

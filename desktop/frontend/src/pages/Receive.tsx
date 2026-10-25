@@ -10,6 +10,7 @@ export function ReceivePage() {
   const s = state.settings;
   const id = state.identity;
   const [pin, setPin] = useState(s.pin);
+  const [showPin, setShowPin] = useState(false);
   const save = (p: Parameters<typeof app.SaveSettings>[0], ok?: string) =>
     app.SaveSettings(p).then((n) => (setState(n), ok && toast.ok(ok)), toast.error);
   const addrs = (id.addrs ?? []).filter((a) => !a.virtual);
@@ -85,19 +86,23 @@ export function ReceivePage() {
         <div className="setting">
           <div>
             <div>Require a PIN</div>
-            <div className="hint">Senders must enter it before you are even asked. After 5 wrong tries, the PIN is locked for a minute.</div>
+            <div className="hint">Senders must enter it before you are even asked. Wrong tries lock the PIN for a minute, then twice as long each time.</div>
           </div>
           <div className="row">
             <input
-              type="text"
+              type={showPin ? "text" : "password"}
               inputMode="numeric"
               style={{ width: 120 }}
               placeholder="PIN"
               value={pin}
               maxLength={12}
+              autoComplete="off"
               onChange={(e) => setPin(e.target.value)}
               onBlur={() => pin !== s.pin && save({ pin }, pin ? "PIN saved" : undefined)}
             />
+            <button className="btn icon ghost" aria-label={showPin ? "Hide PIN" : "Show PIN"} aria-pressed={showPin} onClick={() => setShowPin(!showPin)}>
+              <Icon name="eye" size={16} />
+            </button>
             <Switch checked={s.requirePin && !!s.pin} disabled={!pin.trim() || pin !== s.pin} onChange={(v) => save({ requirePin: v })} label={s.requirePin && s.pin ? "On" : "Off"} />
           </div>
         </div>

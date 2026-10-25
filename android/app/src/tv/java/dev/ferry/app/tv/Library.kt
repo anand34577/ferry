@@ -85,9 +85,11 @@ object Library {
     /** Only works for files this install created; after a reinstall Android no longer counts them as ours. */
     fun delete(ctx: Context, f: LocalFile): Boolean = runCatching { ctx.contentResolver.delete(f.uri, null, null) > 0 }.getOrDefault(false)
 
-    /** Hands the file to another app (PDF viewer, package installer for APKs, …). */
+    /** Hands the file to another app (PDF viewer, gallery, …). APKs are refused: installing them
+        would need the install-packages permission, which widens the app's attack surface. */
     fun openExternally(ctx: Context, uri: Uri, name: String, mime: String): Boolean {
-        val type = if (fileKind(name, mime) == "apk") "application/vnd.android.package-archive" else mime.ifEmpty { Storage.mimeFor(name) }
+        val type = mime.ifEmpty { Storage.mimeFor(name) }
+        if (type == "application/vnd.android.package-archive") return false
         return try {
             ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, type)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -102,6 +104,7 @@ object Library {
 fun openFile(ctx: Context, f: LocalFile, showViewer: (LocalFile) -> Unit) {
     when (f.kind) {
         "image", "video", "audio" -> showViewer(f)
+        "apk" -> toast(ctx, "APKs can't be installed on the TV. Send it to a phone or computer to install it.")
         else -> if (!Library.openExternally(ctx, f.uri, f.name, f.mime)) toast(ctx, "No app on this TV can open “${f.name}”. Send it to a phone or computer instead.")
     }
 }

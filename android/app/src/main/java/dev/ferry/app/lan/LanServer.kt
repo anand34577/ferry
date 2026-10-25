@@ -45,6 +45,11 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
     @Volatile private var session: Session? = null
     @Volatile private var pinFailures = 0
     @Volatile private var pinLockedUntil = 0L
+    @Volatile private var pinLockSeconds = 60L
+    // Pending (waiting-for-the-user) prepare requests, so one machine can't stack unlimited dialogs.
+    private val prepareLock = Any()
+    private val prepareIps = HashSet<String>()
+    private var pendingPrepares = 0
     private val app get() = FerryApp.app
 
     init {
@@ -108,16 +113,20 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
         }
         if (cur != null) expire(cur)
         if (app.prefs.requirePin && app.prefs.pin.isNotEmpty()) {
-            // A 4–6 digit PIN falls to brute force in minutes without a limit: 5 misses lock it for a minute.
+            // Constant-time compare, and every lockout lasts twice as long as the previous one
+            // (1 min, 2 min, 4 min … capped at 15 min), so a short PIN can't be brute-forced from the LAN.
             val now = System.currentTimeMillis()
             if (now < pinLockedUntil) return err(Response.Status.UNAUTHORIZED, "PIN required")
-            if (param(s, "pin") != app.prefs.pin) {
+            if (!MessageDigest.isEqual(param(s, "pin").toByteArray(), app.prefs.pin.toByteArray())) {
                 if (++pinFailures >= 5) {
-                    pinFailures = 0; pinLockedUntil = now + 60_000
+                    pinFailures = 0
+                    pinLockedUntil = now + pinLockSeconds * 1000
+                    pinLockSeconds = (pinLockSeconds * 2).coerceAtMost(900)
                 }
                 return err(Response.Status.UNAUTHORIZED, "PIN required")
             }
             pinFailures = 0
+            pinLockSeconds = 60L
         }
         val o = JSONObject(body(s))
         val info = o.getJSONObject("info")
@@ -139,7 +148,25 @@ class LanServer(private val ctx: Context, private val certs: Certs, val port: In
         val alias = info.optString("alias", "Unknown device").take(60)
         val req = IncomingRequest(UUID.randomUUID().toString(), alias, info.optString("deviceModel", "").take(60), fp,
             trusted = proven, ownAccount = false, files = files.map { (it.dirs + it.name).joinToString("/") to it.size }, source = TMethod.DIRECT)
-        val accepted = app.transfers.askIncoming(req)
+        // A request waits here for the user's decision: cap the number of pending prompts and let a
+        // sender keep only one at a time, so a hostile device can't stack dialogs and notifications.
+        val slot = synchronized(prepareLock) {
+            (pendingPrepares < 3 && s.remoteIpAddress !in prepareIps).also { granted ->
+                if (granted) {
+                    pendingPrepares++
+                    prepareIps.add(s.remoteIpAddress)
+                }
+            }
+        }
+        if (!slot) return err(Response.Status.TOO_MANY_REQUESTS, "Too many incoming requests — try again shortly.")
+        val accepted = try {
+            app.transfers.askIncoming(req)
+        } finally {
+            synchronized(prepareLock) {
+                pendingPrepares--
+                prepareIps.remove(s.remoteIpAddress)
+            }
+        }
         if (!accepted) return err(Response.Status.FORBIDDEN, "Declined")
         val sess = Session(UUID.randomUUID().toString(), alias, s.remoteIpAddress, info.optInt("ferry", 0) >= 1, files.associateBy { it.id })
         session = sess
