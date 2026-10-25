@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -110,6 +111,10 @@ type Server struct {
 	sess         *session
 	pinFails     int
 	pinLockUntil time.Time
+	pinLock      time.Duration // duration of the next PIN lockout; doubles after every lockout
+
+	pendingPrepares int            // prepare requests waiting for the user to decide
+	prepareIPs      map[string]int // senders with a pending request (one each)
 }
 
 // listenHost is "" (all interfaces) in the app; tests use loopback so they never trigger a firewall prompt.
@@ -117,7 +122,7 @@ var listenHost = ""
 
 // Listen binds the first free port from 53317 (LocalSend's default) upwards and starts serving.
 func Listen(id *Identity, host Host, log *slog.Logger) (*Server, error) {
-	s := &Server{id: id, host: host, log: log}
+	s := &Server{id: id, host: host, log: log, pinLock: time.Minute, prepareIPs: map[string]int{}}
 	cfg := &tls.Config{Certificates: []tls.Certificate{id.Cert}, MinVersion: tls.VersionTLS12}
 	var ln net.Listener
 	var err error
@@ -205,23 +210,28 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
+	ip := remoteIP(r)
 	if !s.host.Receiving() {
 		fail(w, 403, "This device is not receiving right now.")
 		return
 	}
 	s.mu.Lock()
-	busy := s.sess != nil && s.sess.active(remoteIP(r))
+	busy := s.sess != nil && s.sess.active(ip)
 	if old := s.sess; old != nil && !busy {
 		s.mu.Unlock()
 		s.expire(old)
 		s.mu.Lock()
 	}
 	if pin := s.host.PIN(); !busy && pin != "" {
-		// A short PIN falls to brute force in minutes without a limit: 5 misses lock it for a minute.
+		// Constant-time compare, and every lockout lasts twice as long as the previous one
+		// (1 min, 2 min, 4 min … capped at 15 min), so a short PIN can't be brute-forced from the LAN.
 		locked := time.Now().Before(s.pinLockUntil)
-		if !locked && r.URL.Query().Get("pin") != pin {
+		if !locked && subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("pin")), []byte(pin)) != 1 {
 			if s.pinFails++; s.pinFails >= 5 {
-				s.pinFails, s.pinLockUntil = 0, time.Now().Add(time.Minute)
+				s.pinFails, s.pinLockUntil = 0, time.Now().Add(s.pinLock)
+				if s.pinLock *= 2; s.pinLock > 15*time.Minute {
+					s.pinLock = 15 * time.Minute
+				}
 			}
 			locked = true
 		}
@@ -231,6 +241,7 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.pinFails = 0
+		s.pinLock = time.Minute
 	}
 	s.mu.Unlock()
 	if busy {
@@ -268,18 +279,37 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 	// LAN could claim a trusted one. A trusted claim only counts when the sender's HTTPS server proves it
 	// holds that certificate; an unproven claim is dropped, so it can neither auto-accept nor show as trusted.
 	claimed := req.Info.Fingerprint
-	trusted := claimed != "" && s.host.IsTrusted(claimed) && s.proves(r.Context(), remoteIP(r), req.Info.Port, claimed)
+	trusted := claimed != "" && s.host.IsTrusted(claimed) && s.proves(r.Context(), ip, req.Info.Port, claimed)
 	if claimed != "" && s.host.IsTrusted(claimed) && !trusted {
 		claimed = ""
 	}
 	in := Incoming{ID: randHex(8), Alias: clip(firstNonEmpty(strings.TrimSpace(req.Info.Alias), "Unknown device"), 60), Model: clip(req.Info.DeviceModel, 60),
 		Fingerprint: claimed, Trusted: trusted, Files: offer, TotalBytes: total}
+	// A request waits here for the user to decide: cap the number of pending prompts and let a
+	// sender keep only one at a time, so a hostile device can't stack dialogs and notifications.
+	s.mu.Lock()
+	take := s.pendingPrepares < 3 && s.prepareIPs[ip] == 0
+	if take {
+		s.pendingPrepares++
+		s.prepareIPs[ip]++
+	}
+	s.mu.Unlock()
+	if !take {
+		fail(w, 429, "Too many incoming requests — try again shortly")
+		return
+	}
 	ok, dir := s.host.Ask(in)
+	s.mu.Lock()
+	s.pendingPrepares--
+	if s.prepareIPs[ip]--; s.prepareIPs[ip] <= 0 {
+		delete(s.prepareIPs, ip)
+	}
+	s.mu.Unlock()
 	if !ok {
 		fail(w, 403, "Declined")
 		return
 	}
-	sess := &session{id: randHex(16), alias: in.Alias, ip: remoteIP(r), ferry: req.Info.Ferry >= 1, files: map[string]*rfile{}, dir: dir}
+	sess := &session{id: randHex(16), alias: in.Alias, ip: ip, ferry: req.Info.Ferry >= 1, files: map[string]*rfile{}, dir: dir}
 	sess.transferID = "lan-" + sess.id
 	sess.lastActivity.Store(time.Now().UnixMilli())
 	tokens := map[string]string{}

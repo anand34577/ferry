@@ -27,6 +27,32 @@ type TrustedDevice struct {
 	AutoAccept  bool   `json:"autoAccept"`
 }
 
+// pinPlain returns the receive PIN in plaintext, unsealing values stored by pinSeal.
+func pinPlain(v string) string {
+	if v == "" {
+		return ""
+	}
+	if p, ok := strings.CutPrefix(v, "dpapi:"); ok {
+		if plain, err := unseal(p); err == nil {
+			return plain
+		}
+		return "" // sealed on another Windows account or damaged: start over
+	}
+	return v // legacy plaintext, migrated on load
+}
+
+// pinSeal encrypts the PIN for the current Windows user. Best effort: if DPAPI fails, the PIN
+// stays readable rather than the receive gate breaking.
+func pinSeal(v string) string {
+	if v == "" {
+		return ""
+	}
+	if enc, err := seal(v); err == nil {
+		return "dpapi:" + enc
+	}
+	return v
+}
+
 // Settings are saved as JSON in %APPDATA%\Ferry\settings.json.
 type Settings struct {
 	Alias            string            `json:"alias"`
@@ -73,6 +99,9 @@ func loadSettings(dir string) *settingsStore {
 	if st.s.Resume == nil {
 		st.s.Resume = map[string]string{}
 	}
+	if st.s.PIN != "" && !strings.HasPrefix(st.s.PIN, "dpapi:") {
+		st.update(func(s *Settings) { s.PIN = pinSeal(s.PIN) }) // encrypt PINs saved by older versions
+	}
 	if strings.TrimSpace(st.s.Alias) == "" {
 		st.s.Alias = defaultSettings().Alias
 	}
@@ -88,6 +117,7 @@ func (st *settingsStore) get() Settings {
 	s := st.s
 	s.Trusted = append([]TrustedDevice(nil), st.s.Trusted...)
 	s.Accounts = append([]Account(nil), st.s.Accounts...)
+	s.PIN = pinPlain(s.PIN) // the UI shows the PIN so the user can tell it to senders
 	return s
 }
 
