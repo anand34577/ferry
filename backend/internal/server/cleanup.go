@@ -24,12 +24,18 @@ import (
 func (s *Server) RunCleanup(ctx context.Context) {
 	s.Cleanup(ctx)
 	t := time.NewTicker(max(s.conf().CleanupInterval, time.Minute)) // 0 would panic
-
+	// Rate-limiter windows and zip tickets live for seconds or minutes; sweeping them every
+	// minute keeps their maps small even when many distinct (possibly spoofed) client IPs appear.
+	fast := time.NewTicker(time.Minute)
 	defer t.Stop()
+	defer fast.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-fast.C:
+			s.limiter.sweep()
+			s.sweepZipTickets()
 		case <-t.C:
 			s.Cleanup(ctx)
 		}
