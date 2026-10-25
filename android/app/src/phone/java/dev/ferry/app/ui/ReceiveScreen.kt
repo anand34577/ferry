@@ -141,7 +141,9 @@ fun ReceiveScreen(nav: NavHostController) {
             ))
             if (requirePin) {
                 Spacer(Modifier.height(12.dp))
-                OutlinedTextField(pin, { v -> pin = v.filter { it.isDigit() }.take(8); app.prefs.pin = pin }, Modifier.fillMaxWidth(),
+                // Clearing the PIN also turns the gate off (Prefs keeps the two in step).
+                OutlinedTextField(pin, { v -> pin = v.filter { it.isDigit() }.take(8); app.prefs.pin = pin; if (pin.isEmpty()) requirePin = false },
+                    Modifier.fillMaxWidth(),
                     label = { Text("PIN") }, singleLine = true, shape = RoundedCornerShape(16.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
             }
             Text("Only your device name is broadcast — never your email or account. Files from your server arrive automatically while you're signed in.",

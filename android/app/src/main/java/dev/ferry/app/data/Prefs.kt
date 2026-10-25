@@ -61,9 +61,21 @@ class Prefs(ctx: Context) {
     var requirePin: Boolean
         get() = sp.getBoolean("requirePin", false)
         set(v) = put("requirePin", v)
+    /** Sealed at rest with the Keystore key (prefix "enc:"); the plaintext lives only in memory.
+        Older plaintext values are migrated on first read. */
     var pin: String
-        get() = str("pin", "")
-        set(v) = put("pin", v)
+        get() {
+            val v = str("pin", "")
+            return when {
+                v.startsWith("enc:") -> SecretBox.open(v.removePrefix("enc:")).orEmpty()
+                v.isNotEmpty() -> v.also { put("pin", "enc:" + SecretBox.seal(it)) } // migrate plaintext once
+                else -> ""
+            }
+        }
+        set(v) {
+            put("pin", if (v.isEmpty()) "" else "enc:" + SecretBox.seal(v))
+            if (v.isEmpty() && requirePin) requirePin = false // a PIN gate with no PIN would silently pass
+        }
     var receiving: Boolean
         get() = sp.getBoolean("receiving", false)
         set(v) = put("receiving", v)

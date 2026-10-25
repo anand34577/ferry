@@ -67,6 +67,21 @@ android {
     testOptions { unitTests.isReturnDefaultValues = true }
 }
 
+// A "release" APK signed with the public debug key must never be built by accident: fail instead.
+// CI sets FERRY_KEYSTORE (release.yml also refuses to publish without it); debug builds are unaffected.
+gradle.taskGraph.whenReady {
+    val signsRelease = allTasks.any {
+        it.name.contains("Release") && (it.name.contains("assemble") || it.name.contains("bundle") ||
+            it.name.contains("package") || it.name.contains("validateSigning"))
+    }
+    if (signsRelease && System.getenv("FERRY_KEYSTORE") == null) {
+        throw GradleException(
+            "Release builds need a signing key. Set FERRY_KEYSTORE, FERRY_KEYSTORE_PASSWORD, FERRY_KEY_ALIAS and " +
+                "FERRY_KEY_PASSWORD (as release.yml does), or build a debug APK with assembleDebug instead."
+        )
+    }
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)

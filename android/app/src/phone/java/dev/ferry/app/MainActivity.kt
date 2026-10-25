@@ -38,7 +38,9 @@ class MainActivity : ComponentActivity() {
     /** Share-sheet entry point, deep links and notification taps. */
     private fun handle(intent: Intent?) {
         intent ?: return
-        intent.getStringExtra("route")?.let { Nav.pending.value = it }
+        // The extra comes from any installed app: only real routes of the navigation graph, or the
+        // app crashes with an unknown-route exception.
+        intent.getStringExtra("route")?.takeIf { it in Nav.routes }?.let { Nav.pending.value = it }
         when (intent.action) {
             Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> {
                 val uris = Storage.sharedUris(this, intent)

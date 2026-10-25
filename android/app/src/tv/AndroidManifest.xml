@@ -6,9 +6,6 @@
     <uses-feature android:name="android.software.leanback" android:required="true" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
-    <!-- APKs sent to the TV open in the system installer (the user still confirms each install). -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-
     <application android:banner="@drawable/tv_banner">
         <activity
             android:name=".MainActivity"
