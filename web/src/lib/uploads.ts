@@ -3,7 +3,7 @@
 import * as tus from "tus-js-client";
 import { createSHA256 } from "hash-wasm";
 import { useSyncExternalStore } from "react";
-import { CLIENT_HEADER, del } from "./api";
+import { CLIENT_HEADER, del, get } from "./api";
 
 export type UpStatus = "queued" | "uploading" | "paused" | "verifying" | "completed" | "failed" | "cancelled" | "skipped";
 
@@ -185,7 +185,12 @@ class UploadManager {
         this.set(id, { status: "verifying", sent: file.size, fileId });
         try {
           const local = await job.hash!;
-          if (serverSha && local && serverSha !== local) {
+          let server = serverSha;
+          if (!server && local && fileId) {
+            // Header missing (older server, or a proxy that strips it): confirm against the stored file.
+            server = await get<{ sha256: string }>(`/api/v1/files/${fileId}`).then((f) => f.sha256).catch(() => undefined);
+          }
+          if (server && local && server !== local) {
             // Never delete a replaced file: the original content is already gone (and replacements are verified server-side).
             if (fileId && opts.conflict !== "replace") await del(`/api/v1/files/${fileId}`).catch(() => {});
             this.finish(id, { status: "failed", error: "The file was corrupted in transit (checksum mismatch). Please retry.", fileId: undefined });
