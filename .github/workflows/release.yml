@@ -8,10 +8,10 @@ jobs:
   binaries:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with: { go-version: "1.26.x", check-latest: true, cache-dependency-path: backend/go.sum }
       - name: Build web UI
         run: cd web && npm ci && npm run build && cp -r dist/. ../backend/internal/server/webui/
@@ -28,7 +28,7 @@ jobs:
             cp ferry.env LICENSE "pkg/$name/"
             if [ "$os" = windows ]; then (cd pkg && zip -qr "../dist/$name.zip" "$name"); else tar -C pkg -czf "dist/$name.tar.gz" "$name"; fi
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: binaries, path: dist/* }
 
   android:
@@ -36,10 +36,10 @@ jobs:
     env:
       KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with: { distribution: temurin, java-version: 17 }
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - name: Decode signing key
         if: env.KEYSTORE_B64 != ''
         run: echo "$KEYSTORE_B64" | base64 -d > $RUNNER_TEMP/release.jks && echo "FERRY_KEYSTORE=$RUNNER_TEMP/release.jks" >> $GITHUB_ENV
@@ -53,17 +53,17 @@ jobs:
         run: test -n "$FERRY_KEYSTORE" || { echo "::error::ANDROID_KEYSTORE_BASE64 secret is missing"; exit 1; } && ./gradlew assembleRelease bundleRelease --no-daemon && mkdir -p ../dist
           && cp app/build/outputs/apk/phone/release/*.apk ../dist/ferry_${GITHUB_REF_NAME}.apk && cp app/build/outputs/bundle/phoneRelease/*.aab ../dist/ferry_${GITHUB_REF_NAME}.aab
           && cp app/build/outputs/apk/tv/release/*.apk ../dist/ferry-tv_${GITHUB_REF_NAME}.apk && cp app/build/outputs/bundle/tvRelease/*.aab ../dist/ferry-tv_${GITHUB_REF_NAME}.aab
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: android, path: dist/* }
 
   desktop:
     runs-on: windows-latest
     defaults: { run: { working-directory: desktop, shell: bash } }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with: { go-version: "1.26.x", check-latest: true, cache-dependency-path: desktop/go.sum }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
       - run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
       - name: Build the Windows app and installer
@@ -77,18 +77,18 @@ jobs:
           mkdir -p ../dist
           cp build/bin/Ferry-setup.exe "../dist/ferry-windows_${GITHUB_REF_NAME}_setup.exe"
           cp build/bin/FerryDesktop.exe "../dist/ferry-windows_${GITHUB_REF_NAME}_portable.exe"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: desktop, path: dist/* }
 
   image:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         env: { DOCKER_BUILD_RECORD_UPLOAD: "false" }
         with:
           context: .
@@ -104,15 +104,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Only the release files (the Docker build also uploads a build-record artifact).
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: binaries, path: dist }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: android, path: dist }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { name: desktop, path: dist }
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: dist/*
           generate_release_notes: true
